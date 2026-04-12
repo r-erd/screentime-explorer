@@ -1,0 +1,26 @@
+# Dependency directories
+node_modules/
+
+# Build artifacts (Electron-builder output)
+dist/
+build/
+
+# Local database files and logs
+*.db
+*.db-shm
+*.db-wal
+collect.log
+
+# Python
+*.pyc
+__pycache__/
+venv/
+.venv/
+
+# macOS system files
+.DS_Store
+
+# Generated and temporary assets
+renderer/chart.umd.js
+screenshot.png
+*.log
