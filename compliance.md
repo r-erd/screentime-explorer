@@ -29,11 +29,10 @@ In accordance with the MIT License, the original copyright notices and permissio
 The icons used within the application's user interface (e.g., `↻`, `‹`, `›`, `ⓘ`, `🔒`) are standard **Unicode characters** rendered by the operating system's default system fonts. These characters do not require separate licensing or attribution.
 
 ### 2.2 Custom Brand Assets
-The application's primary identity assets are custom-designed for this project:
+The application's primary identity asset is custom-designed for this project:
 - **Application Icon**: `assets/icon.png`
-- **Menu Bar Template Icon**: `assets/iconTemplate.png`
 
-These assets are considered proprietary to the Screenlog project and are covered under the application's overall proprietary license (See Section 1.1).
+This asset is considered proprietary to the Screenlog project and is covered under the application's overall proprietary license (See Section 1.1).
 
 ---
 
