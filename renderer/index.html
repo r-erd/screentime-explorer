@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!--
+    Content Security Policy:
+    - script-src 'self'   → only local scripts; no CDN, no inline scripts, no eval
+    - connect-src 'none'  → fetch/XHR to any URL is blocked at browser level
+    - frame-src 'none'    → no iframes
+  -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self';">
+  <title>Screenlog</title>
+  <!-- Chart.js is bundled locally — never loaded from a CDN -->
+  <script src="chart.umd.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      min-height: 100vh;
+    }
+
+    /* ── FDA Overlay ── */
+    .fda-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(245,245,247,0.97);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      -webkit-app-region: drag;
+    }
+    .fda-card {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+      -webkit-app-region: no-drag;
+    }
+    .fda-card .fda-icon { font-size: 44px; margin-bottom: 16px; }
+    .fda-card h2 { font-size: 19px; font-weight: 700; margin-bottom: 10px; }
+    .fda-card p { font-size: 14px; color: #555; margin-bottom: 20px; line-height: 1.6; }
+    .fda-steps {
+      background: #f5f5f7; border-radius: 12px; padding: 14px 20px;
+      text-align: left; margin-bottom: 24px;
+    }
+    .fda-steps ol { padding-left: 18px; font-size: 13px; line-height: 2; color: #333; }
+    .fda-card .fda-btn {
+      display: block; width: 100%; padding: 11px;
+      border-radius: 10px; border: none; cursor: pointer;
+      font-size: 14px; font-weight: 600; font-family: inherit;
+      transition: opacity 0.12s; margin-bottom: 10px;
+    }
+    .fda-card .fda-btn:last-child { margin-bottom: 0; }
+    .fda-card .fda-btn-primary { background: #1d1d1f; color: white; }
+    .fda-card .fda-btn-secondary { background: #f0f0f0; color: #333; }
+    .fda-card .fda-btn:hover { opacity: 0.85; }
+
+    /* ── Header ── */
+    header {
+      background: white;
+      border-bottom: 1px solid #e5e5e5;
+      padding: 12px 24px 12px 80px; /* Extra left padding for traffic lights */
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      -webkit-app-region: drag;
+    }
+    header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
+
+    .mode-group, .period-nav, .collect-wrap, .device-filters {
+      -webkit-app-region: no-drag;
+    }
+
+    .mode-group {
+      display: flex;
+      background: #ebebeb;
+      border-radius: 9px;
+      padding: 3px;
+      gap: 2px;
+    }
+    .mode-btn {
+      padding: 5px 13px; border-radius: 7px; border: none;
+      background: transparent; cursor: pointer; font-size: 13px;
+      font-weight: 500; color: #666; font-family: inherit;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .mode-btn.active {
+      background: white; color: #1d1d1f; font-weight: 600;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+
+    .period-nav { display: flex; align-items: center; gap: 4px; }
+    .nav-arrow {
+      width: 28px; height: 28px; border: 1px solid #d5d5d5;
+      border-radius: 7px; background: white; cursor: pointer;
+      font-size: 17px; line-height: 1; color: #444;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.12s; flex-shrink: 0;
+    }
+    .nav-arrow:hover:not(:disabled) { border-color: #999; color: #111; }
+    .nav-arrow:disabled { opacity: 0.28; cursor: default; }
+    .period-label-wrap { display: flex; flex-direction: column; align-items: center; }
+    #period-label {
+      min-width: 148px; text-align: center; font-size: 14px; font-weight: 600;
+      border: none; background: transparent; cursor: pointer; color: #1d1d1f;
+      padding: 5px 8px 1px; border-radius: 7px; font-family: inherit;
+      transition: background 0.12s; white-space: nowrap;
+    }
+    #period-label:hover { background: #f0f0f0; }
+    #period-label.is-current { cursor: default; color: #888; }
+    #period-label.is-current:hover { background: transparent; }
+    #period-year {
+      font-size: 11px; font-weight: 500; color: #bbb;
+      letter-spacing: 0.3px; line-height: 1; padding-bottom: 2px;
+    }
+
+    .collect-wrap {
+      margin-left: auto; display: flex;
+      flex-direction: column; align-items: flex-end; gap: 2px;
+    }
+    #collect-btn {
+      display: flex; align-items: center; gap: 5px;
+      padding: 5px 12px; border-radius: 8px; border: 1px solid #d5d5d5;
+      background: white; cursor: pointer; font-size: 13px; font-weight: 500;
+      color: #333; font-family: inherit;
+      transition: border-color 0.12s, opacity 0.12s; white-space: nowrap;
+    }
+    #collect-btn:hover:not(:disabled) { border-color: #999; }
+    #collect-btn:disabled { opacity: 0.5; cursor: default; }
+    #collect-icon { display: inline-block; font-size: 14px; }
+    #collect-btn.spinning #collect-icon { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #last-run { font-size: 10px; color: #bbb; white-space: nowrap; }
+    #logs-btn {
+      background: none; border: none; font-family: inherit; font-size: 10px;
+      color: #bbb; cursor: pointer; padding: 0;
+      text-decoration: underline; text-underline-offset: 2px;
+    }
+    #logs-btn:hover { color: #888; }
+
+    .device-filters { display: flex; gap: 7px; align-items: center; }
+    .device-pill {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 11px 4px 8px; border-radius: 20px;
+      border: 1.5px solid transparent; cursor: pointer;
+      font-size: 12px; font-weight: 500;
+      transition: opacity 0.12s; user-select: none;
+    }
+    .device-pill .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .device-pill[data-device="mac"]    { border-color: #1d1d1f; color: #1d1d1f; }
+    .device-pill[data-device="iphone"] { border-color: #007AFF; color: #007AFF; }
+    .device-pill[data-device="ipad"]   { border-color: #34C759; color: #34C759; }
+    .device-pill[data-device="mac"]    .dot { background: #1d1d1f; }
+    .device-pill[data-device="iphone"] .dot { background: #007AFF; }
+    .device-pill[data-device="ipad"]   .dot { background: #34C759; }
+    .device-pill.off { opacity: 0.3; }
+    .device-pill.unavailable {
+      opacity: 0.35; border-style: dashed; cursor: default; pointer-events: none;
+    }
+
+    .device-hint { position: relative; display: flex; align-items: center; }
+    .hint-icon {
+      font-size: 14px; color: #bbb; cursor: pointer;
+      width: 22px; height: 22px; display: flex; align-items: center;
+      justify-content: center; border-radius: 50%;
+      transition: color 0.12s; user-select: none;
+    }
+    .hint-icon:hover { color: #888; }
+    .hint-tooltip {
+      display: none; position: absolute; right: 0; top: calc(100% + 10px);
+      background: #1d1d1f; color: white; font-size: 12px; line-height: 1.6;
+      padding: 11px 14px; border-radius: 10px; width: 260px; z-index: 200;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25); pointer-events: none;
+    }
+    .hint-tooltip::before {
+      content: ''; position: absolute; top: -5px; right: 8px;
+      width: 0; height: 0;
+      border-left: 5px solid transparent; border-right: 5px solid transparent;
+      border-bottom: 5px solid #1d1d1f;
+    }
+    .device-hint:hover .hint-tooltip { display: block; }
+
+    /* ── Tabs ── */
+    nav.tabs {
+      background: white; border-bottom: 1px solid #e5e5e5;
+      padding: 0 24px; display: flex;
+    }
+    .tab-btn {
+      padding: 10px 16px; border: none; background: transparent;
+      cursor: pointer; font-size: 14px; color: #888;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      font-family: inherit; transition: color 0.12s;
+    }
+    .tab-btn:hover { color: #444; }
+    .tab-btn.active { color: #1d1d1f; border-bottom-color: #1d1d1f; font-weight: 600; }
+
+    /* ── Main ── */
+    main { max-width: 960px; margin: 0 auto; padding: 24px 20px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+    .stat-card {
+      background: white; border-radius: 14px; padding: 16px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    }
+    .stat-card .label {
+      font-size: 11px; font-weight: 600; color: #999;
+      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
+    }
+    .stat-card .value { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+
+    .chart-card {
+      background: white; border-radius: 14px; padding: 20px 24px 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    }
+    .card-title {
+      font-size: 12px; font-weight: 600; color: #999;
+      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 16px;
+    }
+    .chart-wrap { position: relative; user-select: none; }
+    .no-data { text-align: center; color: #aaa; font-size: 15px; padding: 60px 0; }
+    .loading { text-align: center; color: #ccc; font-size: 14px; padding: 60px 0; }
+
+    /* ── Logs modal ── */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+      z-index: 500; display: flex; align-items: center;
+      justify-content: center; padding: 24px;
+      -webkit-app-region: drag;
+    }
+    .modal-card {
+      background: white; border-radius: 16px; width: 100%;
+      max-width: 640px; max-height: 80vh; overflow-y: auto;
+      padding: 24px; box-shadow: 0 8px 40px rgba(0,0,0,0.2);
+      -webkit-app-region: no-drag;
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .modal-title { font-size: 15px; font-weight: 700; }
+    .modal-close {
+      background: none; border: none; font-size: 14px; color: #aaa;
+      cursor: pointer; padding: 4px 6px; border-radius: 6px; line-height: 1;
+    }
+    .modal-close:hover { background: #f5f5f7; color: #555; }
+    .logs-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .logs-table th {
+      text-align: left; font-size: 11px; font-weight: 600; color: #999;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      padding: 0 16px 12px 0; border-bottom: 1px solid #f0f0f0;
+    }
+    .logs-table td {
+      padding: 11px 16px 11px 0; border-bottom: 1px solid #f5f5f7;
+      color: #444; vertical-align: top;
+    }
+    .logs-table tr:last-child td { border-bottom: none; }
+    .logs-table .ts { color: #1d1d1f; font-weight: 500; }
+    .logs-table .ts-rel { display: block; font-size: 11px; color: #bbb; margin-top: 2px; }
+    .badge { display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+    .badge-new  { background: #e9f6ee; color: #1a7a3a; }
+    .badge-zero { background: #f5f5f7; color: #aaa; }
+    .badge-err  { background: #fff0f0; color: #c0392b; }
+
+    @media (max-width: 680px) {
+      .stats { grid-template-columns: 1fr 1fr; }
+      .stat-card:last-child { grid-column: span 2; }
+      .device-filters { margin-left: 0; }
+      #period-label { min-width: 120px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- FDA onboarding — shown when Full Disk Access is not granted -->
+<div id="fda-overlay" class="fda-overlay" style="display:none">
+  <div class="fda-card">
+    <div class="fda-icon">🔒</div>
+    <h2>Full Disk Access Required</h2>
+    <p>Screen Time needs Full Disk Access to read Apple's usage database on your Mac.</p>
+    <div class="fda-steps">
+      <ol>
+        <li>Open <strong>System Settings</strong></li>
+        <li>Go to <strong>Privacy &amp; Security → Full Disk Access</strong></li>
+        <li>Enable access for <strong>Screen Time</strong></li>
+      </ol>
+    </div>
+    <button id="open-settings-btn" class="fda-btn fda-btn-primary">Open System Settings</button>
+    <button id="check-again-btn" class="fda-btn fda-btn-secondary">Check Again</button>
+  </div>
+</div>
+
+<header>
+  <h1>Screen Time</h1>
+
+  <div class="mode-group">
+    <button class="mode-btn" data-mode="day">Day</button>
+    <button class="mode-btn active" data-mode="week">Week</button>
+    <button class="mode-btn" data-mode="month">Month</button>
+    <button class="mode-btn" data-mode="year">Year</button>
+  </div>
+
+  <div class="period-nav">
+    <button class="nav-arrow" id="nav-prev" title="Previous period">‹</button>
+    <div class="period-label-wrap">
+      <button id="period-label" title="Jump to current period">This Week</button>
+      <span id="period-year"></span>
+    </div>
+    <button class="nav-arrow" id="nav-next" disabled title="Next period">›</button>
+  </div>
+
+  <div class="collect-wrap">
+    <button id="collect-btn">
+      <span id="collect-icon">↻</span> Collect now
+    </button>
+    <span id="last-run">Last run: —</span>
+    <button id="logs-btn">Logs</button>
+  </div>
+
+  <div class="device-filters" id="device-filters">
+    <div class="device-pill" data-device="mac"><span class="dot"></span>Mac</div>
+    <div class="device-pill" data-device="iphone"><span class="dot"></span>iPhone</div>
+    <div class="device-pill" data-device="ipad"><span class="dot"></span>iPad</div>
+    <div class="device-hint" id="device-hint" style="display:none">
+      <span class="hint-icon">ⓘ</span>
+      <div class="hint-tooltip">
+        <strong>iPhone &amp; iPad data not found.</strong><br>
+        On your iPhone: <strong>Settings → Screen Time</strong> → enable <strong>Share across devices</strong>. Then click Collect now.
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="overview">Overview</button>
+  <button class="tab-btn" data-tab="daily">Daily</button>
+  <button class="tab-btn" data-tab="hourly">Hourly</button>
+</nav>
+
+<main>
+  <div id="tab-overview" class="tab-content active">
+    <div class="stats">
+      <div class="stat-card"><div class="label">Total Screen Time</div><div class="value" id="ov-total">—</div></div>
+      <div class="stat-card"><div class="label">Apps Used</div><div class="value" id="ov-apps">—</div></div>
+      <div class="stat-card"><div class="label">Daily Average</div><div class="value" id="ov-avg">—</div></div>
+    </div>
+    <div class="chart-card">
+      <div class="card-title">Top Apps</div>
+      <div id="ov-loading" class="loading">Loading…</div>
+      <div id="ov-nodata" class="no-data" style="display:none">No data for this period.</div>
+      <div class="chart-wrap" id="ov-wrap" style="display:none"><canvas id="ov-chart"></canvas></div>
+    </div>
+  </div>
+
+  <div id="tab-daily" class="tab-content">
+    <div class="stats">
+      <div class="stat-card"><div class="label">Total Screen Time</div><div class="value" id="dy-total">—</div></div>
+      <div class="stat-card"><div class="label">Daily Average</div><div class="value" id="dy-avg">—</div></div>
+      <div class="stat-card"><div class="label">Most Active Day</div><div class="value" id="dy-peak">—</div></div>
+    </div>
+    <div class="chart-card">
+      <div class="card-title">Usage Per Day</div>
+      <div id="dy-loading" class="loading">Loading…</div>
+      <div id="dy-nodata" class="no-data" style="display:none">No data for this period.</div>
+      <div class="chart-wrap" id="dy-wrap" style="display:none; height:280px"><canvas id="dy-chart"></canvas></div>
+    </div>
+  </div>
+
+  <div id="tab-hourly" class="tab-content">
+    <div class="stats">
+      <div class="stat-card"><div class="label">Peak Hour</div><div class="value" id="hr-peak">—</div></div>
+      <div class="stat-card"><div class="label">Peak Avg Usage</div><div class="value" id="hr-peak-val">—</div></div>
+      <div class="stat-card"><div class="label">Quietest Hour</div><div class="value" id="hr-quiet">—</div></div>
+    </div>
+    <div class="chart-card">
+      <div class="card-title">Average Usage by Hour of Day</div>
+      <div id="hr-loading" class="loading">Loading…</div>
+      <div id="hr-nodata" class="no-data" style="display:none">No data for this period.</div>
+      <div class="chart-wrap" id="hr-wrap" style="display:none; height:260px"><canvas id="hr-chart"></canvas></div>
+    </div>
+  </div>
+</main>
+
+<!-- Logs modal -->
+<div id="logs-modal" class="modal-backdrop" style="display:none">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span class="modal-title">Collection History</span>
+      <button id="logs-close" class="modal-close">✕</button>
+    </div>
+    <div id="logs-loading" class="loading">Loading…</div>
+    <div id="logs-nodata" class="no-data" style="display:none">
+      No runs yet. Click <strong>Collect now</strong> to run the first collection.
+    </div>
+    <table id="logs-table" class="logs-table" style="display:none">
+      <thead><tr><th>Time</th><th>Fetched</th><th>Inserted</th><th>Status</th></tr></thead>
+      <tbody id="logs-tbody"></tbody>
+    </table>
+
+    <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #f0f0f0;">
+      <div class="modal-title" style="margin-bottom: 12px; font-size: 13px; color: #999; text-transform: uppercase; letter-spacing: 0.5px;">Data Management</div>
+      <div style="display: flex; gap: 10px;">
+        <button id="export-btn" class="fda-btn fda-btn-secondary" style="margin:0; flex:1; height: 38px;">Export Backup…</button>
+        <button id="import-btn" class="fda-btn fda-btn-secondary" style="margin:0; flex:1; height: 38px;">Import Backup…</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
