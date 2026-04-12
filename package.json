@@ -35,7 +35,7 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "assets/icon.icns",
+      "icon": "assets/icon.png",
       "target": [
         { "target": "dmg", "arch": ["arm64", "x64"] }
       ],
