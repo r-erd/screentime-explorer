@@ -23,6 +23,7 @@ const {
   session,
 } = require('electron');
 const path = require('path');
+const fs   = require('fs');
 
 // Prevent a second instance from launching
 if (!app.requestSingleInstanceLock()) {
@@ -101,18 +102,44 @@ function createWindow() {
 
 // ── Tray ──────────────────────────────────────────────────────────────────────
 
-function createTray() {
-  const iconPath = path.join(__dirname, '../../assets/iconTemplate.png');
-  let icon;
-  try {
-    icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) throw new Error('icon empty');
-  } catch {
-    icon = nativeImage.createEmpty();
-  }
+// Fallback 16x16 + 32x32 bar-chart PNGs (black on transparent, template-style)
+const FALLBACK_ICON_1X =
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAH0lEQVR42mNgGAWkgv9IeCQYgE3xIDcAXXIIGjAwAAA2XjjIFAlGlwAAAABJRU5ErkJggg==';
+const FALLBACK_ICON_2X =
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAANUlEQVR42u3OsQ0AMAgEMfZfOkyASENB4pMoeTlCkuY6xQEAAOwH3A4DAOwFdI8AAO8D9FcJhxPjHQC3hewAAAAASUVORK5CYII=';
 
+// Resolve an asset path that works both in development and in a packaged .app.
+// In a packaged app, asarUnpack assets live in app.asar.unpacked/ on the real
+// filesystem — nativeImage and other native APIs can only read real paths.
+function assetPath(...parts) {
+  const base = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : path.join(__dirname, '../..');
+  return path.join(base, ...parts);
+}
+
+function buildTrayIcon() {
+  const path1x = assetPath('assets', 'iconTemplate.png');
+  const path2x = assetPath('assets', 'iconTemplate@2x.png');
+
+  // Load from the real filesystem (not through ASAR virtual layer)
+  let buf1x = null, buf2x = null;
+  try { buf1x = fs.readFileSync(path1x); } catch { /* use fallback */ }
+  try { buf2x = fs.readFileSync(path2x); } catch { /* use fallback */ }
+
+  const icon = buf2x
+    ? nativeImage.createFromBuffer(buf2x, { scaleFactor: 2.0 })
+    : buf1x
+      ? nativeImage.createFromBuffer(buf1x, { scaleFactor: 1.0 })
+      : nativeImage.createFromBuffer(Buffer.from(FALLBACK_ICON_2X, 'base64'), { scaleFactor: 2.0 });
+
+  icon.isMacTemplateImage = true;
+  return icon;
+}
+
+function createTray() {
+  const icon = buildTrayIcon();
   tray = new Tray(icon);
-  if (icon.isEmpty()) tray.setTitle('ST'); // text fallback if no icon file yet
 
   tray.setToolTip('Screen Time');
 

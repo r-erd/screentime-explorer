@@ -130,7 +130,13 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:update-app-name', (_event, { bundleId, name }) => {
+  ipcMain.handle('db:update-app-name', (_event, { bundleId, name } = {}) => {
+    if (typeof bundleId !== 'string' || bundleId.length === 0 || bundleId.length > 512) {
+      throw Object.assign(new Error('Invalid bundleId'), { code: 'INVALID_PARAMS' });
+    }
+    if (typeof name !== 'string' || name.length > 256) {
+      throw Object.assign(new Error('Invalid name'), { code: 'INVALID_PARAMS' });
+    }
     return db.updateAppName(bundleId, name);
   });
 }

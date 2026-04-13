@@ -256,6 +256,7 @@ async function loadOverview() {
 
   const canvas = document.getElementById('ov-chart');
   canvas.style.height = `${Math.max(280, filtered.length * 28)}px`;
+  canvas.title = 'Double-click any row to rename';
 
   charts['ov'] = new Chart(canvas, {
     type: 'bar',
@@ -291,42 +292,13 @@ async function loadOverview() {
     },
   });
 
-  // Handle double-click to rename
-  canvas.ondblclick = async (e) => {
+  // Double-click anywhere on a row (bar or label) to rename
+  canvas.ondblclick = (e) => {
     const chart = charts['ov'];
     if (!chart) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Check for click on a bar
-    const points = chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
-    let index = -1;
-
-    if (points.length > 0) {
-      index = points[0].index;
-    } else {
-      // Check for click on Y-axis labels
-      const yAxis = chart.scales.y;
-      const x = e.offsetX;
-      const y = e.offsetY;
-      
-      // Horizontal bar chart: labels are to the left of the chartArea
-      // We allow a small margin for ease of clicking
-      if (x <= yAxis.right + 5) {
-        index = yAxis.getValueForPixel(y);
-      }
-    }
-
-    if (index >= 0 && index < filtered.length) {
-      const item = filtered[index];
-      const current = item.display_name;
-      const newName = prompt(`Rename "${current}" to:`, current);
-      if (newName !== null) {
-        await window.api.updateAppName(item.app, newName);
-        loadOverview(); // Refresh the chart
-      }
-    }
+    const index = Math.round(chart.scales.y.getValueForPixel(e.offsetY));
+    if (index < 0 || index >= filtered.length) return;
+    showRenamePopover(filtered[index], e.clientX, e.clientY);
   };
 }
 
@@ -456,6 +428,45 @@ async function loadHourly() {
       },
     },
   });
+}
+
+// ── Rename popover ────────────────────────────────────────────────────────────
+
+function showRenamePopover(item, clientX, clientY) {
+  const popover = document.getElementById('rename-popover');
+  const input   = document.getElementById('rename-input');
+
+  input.value = item.display_name;
+
+  // Position near the click, keeping it within the viewport
+  const W = window.innerWidth, H = window.innerHeight;
+  const PW = 260, PH = 110;
+  popover.style.left = `${Math.min(clientX, W - PW - 12)}px`;
+  popover.style.top  = `${Math.min(clientY, H - PH - 12)}px`;
+  popover.style.display = 'block';
+
+  input.focus();
+  input.select();
+
+  async function commit() {
+    const name = input.value.trim();
+    popover.style.display = 'none';
+    if (name === item.display_name) return;
+    await window.api.updateAppName(item.app, name);
+    loadOverview();
+  }
+
+  function cancel() {
+    popover.style.display = 'none';
+  }
+
+  // Wire up buttons (replace previous listeners each time)
+  document.getElementById('rename-ok').onclick     = commit;
+  document.getElementById('rename-cancel').onclick = cancel;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter')  commit();
+    if (e.key === 'Escape') cancel();
+  };
 }
 
 // ── Collect button ────────────────────────────────────────────────────────────

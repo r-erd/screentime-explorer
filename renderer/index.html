@@ -393,6 +393,23 @@
   </div>
 </main>
 
+<!-- Rename popover -->
+<div id="rename-popover" style="display:none; position:fixed; z-index:600; background:white;
+     border-radius:10px; box-shadow:0 4px 24px rgba(0,0,0,0.18); padding:14px 16px; min-width:240px;">
+  <div style="font-size:11px; font-weight:600; color:#999; text-transform:uppercase;
+              letter-spacing:0.5px; margin-bottom:8px;">Rename app</div>
+  <input id="rename-input" type="text" style="width:100%; font-size:14px; font-family:inherit;
+         padding:7px 10px; border:1.5px solid #d5d5d5; border-radius:7px; outline:none;
+         box-sizing:border-box;">
+  <div style="display:flex; gap:8px; margin-top:10px; justify-content:flex-end;">
+    <button id="rename-cancel" style="font-family:inherit; font-size:13px; padding:5px 12px;
+            border:1px solid #d5d5d5; border-radius:7px; background:white; cursor:pointer;">Cancel</button>
+    <button id="rename-ok" style="font-family:inherit; font-size:13px; font-weight:600;
+            padding:5px 12px; border:none; border-radius:7px; background:#1d1d1f;
+            color:white; cursor:pointer;">Rename</button>
+  </div>
+</div>
+
 <!-- Logs modal -->
 <div id="logs-modal" class="modal-backdrop" style="display:none">
   <div class="modal-card">
