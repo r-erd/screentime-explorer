@@ -1,4 +1,4 @@
-# Screen Time
+# Screenlog
 
 A macOS menu bar app that visualizes your Screen Time data — across Mac, iPhone, and iPad. No cloud services, no Python, no server. Data stays entirely on your machine.
 
@@ -9,6 +9,9 @@ A macOS menu bar app that visualizes your Screen Time data — across Mac, iPhon
 - **Multi-device** — shows Mac, iPhone, and iPad usage side by side (requires iCloud Screen Time sync)
 - **Three views** — Overview (top apps), Daily (usage per day), Hourly (average by hour)
 - **Period navigation** — Day / Week / Month / Year with ‹ › arrows
+- **Daily goal** — set a screen time target; days that meet it turn green, a threshold line appears on the chart, and KPI cards show your success rate and streaks
+- **App renaming** — double-click any bar in the Overview chart to give an app a friendly name
+- **Import / Export** — back up and restore your history database
 - **Secure** — reads Apple's database read-only, all data stays local
 
 ## Requirements
@@ -20,7 +23,7 @@ A macOS menu bar app that visualizes your Screen Time data — across Mac, iPhon
 
 ### Download (recommended)
 
-Download the latest `Screen Time-*.dmg` from [Releases](../../releases), open it, and drag **Screen Time** to Applications.
+Download the latest `Screenlog-*.dmg` from [Releases](../../releases), open it, and drag **Screenlog** to Applications.
 
 ### Build from source
 
@@ -31,20 +34,28 @@ npm install
 npm start
 ```
 
-> **Note for contributors:** `npm install` runs `electron-builder install-app-deps` via postinstall, which compiles `better-sqlite3` against the correct Electron runtime automatically.
+> **Note:** `npm install` runs `electron-builder install-app-deps` via postinstall, which compiles `better-sqlite3` against the correct Electron runtime automatically.
+
+To build a distributable `.dmg`:
+
+```bash
+CSC_IDENTITY_AUTO_DISCOVERY=false npm run build        # arm64 (Apple Silicon)
+CSC_IDENTITY_AUTO_DISCOVERY=false npm run build:x64    # Intel
+CSC_IDENTITY_AUTO_DISCOVERY=false npm run build:universal  # both in one binary
+```
 
 ## First launch
 
-On first launch, Screen Time will show a setup screen asking for **Full Disk Access**.
+On first launch, Screenlog will show a setup screen asking for **Full Disk Access**.
 
 Apple's Screen Time database (`~/Library/Application Support/Knowledge/knowledgeC.db`) is protected by macOS privacy controls. Full Disk Access is required to read it.
 
 1. Click **Open System Settings** in the app
 2. Go to **Privacy & Security → Full Disk Access**
-3. Click `+` and add **Screen Time** (or **Electron** if running via `npm start`)
+3. Click `+` and add **Screenlog** (or **Electron** if running via `npm start`)
 4. Click **Check Again** in the app
 
-> **Development note:** When running via `npm start`, the process is `node_modules/electron/dist/Electron.app` — you need to grant FDA to that binary, not to a built `Screen Time.app`. For testing the real app, run `npm run build` and open `dist/mac-arm64/Screen Time.app` directly.
+> **Development note:** When running via `npm start`, grant FDA to `node_modules/electron/dist/Electron.app`. For testing the packaged app, run `npm run build` and open `dist/mac-arm64/Screenlog.app` directly.
 
 ## iPhone & iPad data
 
@@ -52,11 +63,59 @@ On your iPhone or iPad: **Settings → Screen Time → Share Across Devices** �
 
 Once enabled, Apple syncs usage data to your Mac via iCloud automatically. Click **Collect now** in the app after enabling it to pick up the data immediately.
 
+## Usage
+
+### Views
+
+| Tab | What it shows |
+|-----|--------------|
+| **Overview** | Top apps ranked by total usage for the period, as a horizontal bar chart. Double-click any bar to rename the app. |
+| **Daily** | Total screen time per day as a vertical bar chart. Green bars indicate days the daily goal was met. |
+| **Hourly** | Average usage by hour of day across the period. |
+
+### Period selector
+
+Use **Day / Week / Month / Year** buttons to set the period granularity, and the **‹ ›** arrows to navigate. Click the period label (e.g. "This Week") to jump back to the current period.
+
+### Daily goal
+
+Open **Settings** (⚙ in the header) and enter a target in hours under **Daily Goal**. Once set:
+- Days that meet the target show as **green bars** in the Daily chart
+- A red dashed **threshold line** appears on the Daily chart
+- Four **KPI cards** appear in both the Overview and Daily tabs:
+  - **Days on Target** — how many days with data were under the limit
+  - **Success Rate** — percentage of days on target (green ≥ 80 %, red < 50 %)
+  - **Current Streak** — consecutive days meeting the goal from the most recent day with data
+  - **Best Streak** — longest consecutive run within the current period
+
+### App renaming
+
+In the Overview chart, double-click any bar to open a rename popover. The friendly name is saved locally and persists across restarts.
+
+### Settings (⚙)
+
+| Section | Options |
+|---------|---------|
+| **Daily Goal** | Set or clear a daily screen time target in hours |
+| **Data** | Export a backup of your database, or import a previous backup |
+| **Collection History** | Log of every collection run with row counts and error messages |
+
 ## How it works
 
-macOS writes Screen Time data for all devices on the same iCloud account into a local SQLite database at `~/Library/Application Support/Knowledge/knowledgeC.db`. Screen Time reads from that database (read-only, never writes to it), stores the records in its own database at `~/Library/Application Support/Screen Time/screentime.db`, and displays them in the dashboard.
+macOS writes Screen Time data for all devices on the same iCloud account into a local SQLite database at `~/Library/Application Support/Knowledge/knowledgeC.db`. Screenlog reads from that database (read-only, never writes to it), stores the records in its own database at `~/Library/Application Support/Screenlog/screentime.db`, and displays them in the dashboard.
 
 Collection runs automatically every hour and whenever your Mac wakes from sleep.
+
+## Updating icons
+
+Use `generate-icons.sh` to regenerate icon assets from source PNGs:
+
+```bash
+./generate-icons.sh --app assets/screentime_app.png        # regenerates icon.icns
+./generate-icons.sh --menubar assets/screentime_menu.png   # regenerates iconTemplate PNGs
+```
+
+Source images should be provided at the largest size (1024 × 1024 for the app icon, any size for the menu bar icon). The script converts the menu bar icon to a black-on-transparent template image automatically.
 
 ## Security
 
@@ -75,4 +134,3 @@ All data stays on your Mac. Nothing is sent anywhere. `screentime.db` is listed 
 ## Credits
 
 SQL query adapted from [Felix Kohlhas's ScreenFlux project](https://felixkohlhas.com/projects/screentime/) and [Bob Rudis's original R exploration](https://rud.is/b/2019/10/28/spelunking-macos-screentime-app-usage-with-r/).
-# screentime-explorer

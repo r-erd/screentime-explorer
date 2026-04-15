@@ -24,7 +24,26 @@ const state = {
   hasData:   { mac: false, iphone: false, ipad: false },
 };
 
+const settings = {
+  dailyTargetHours: null,
+};
+
 const charts = {};
+
+// ── Settings persistence ──────────────────────────────────────────────────────
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem('screenlog_settings');
+    if (raw) Object.assign(settings, JSON.parse(raw));
+  } catch { /* ignore */ }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem('screenlog_settings', JSON.stringify(settings));
+  } catch { /* ignore */ }
+}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -138,7 +157,6 @@ function getPeriodLabel(mode, offset) {
     if (offset === 0)       label = 'This Year';
     else if (offset === -1) label = 'Last Year';
     else label = String(y);
-    // year is already embedded in the label for year mode
   }
 
   return { label, year };
@@ -226,17 +244,26 @@ function showTabState(prefix, tabState) {
 async function loadOverview() {
   showTabState('ov', 'loading');
   const [from, to] = getApiRange();
-  const { apps } = await window.api.getScreentime(from, to);
+
+  // Fetch app breakdown + daily totals in parallel (daily needed for KPIs)
+  const [{ apps }, { days }] = await Promise.all([
+    window.api.getScreentime(from, to),
+    window.api.getDaily(from, to),
+  ]);
 
   const filtered = apps.filter(a => rowTotal(a) > 0).slice(0, 15);
 
   if (filtered.length === 0) {
     showTabState('ov', 'nodata');
-    document.getElementById('ov-total').textContent = '—';
-    document.getElementById('ov-apps').textContent  = '—';
-    document.getElementById('ov-avg').textContent   = '—';
+    document.getElementById('ov-total').textContent  = '—';
+    document.getElementById('ov-apps').textContent   = '—';
+    document.getElementById('ov-avg').textContent    = '—';
+    document.getElementById('ov-kpi').style.display  = 'none';
     return;
   }
+
+  // KPIs (uses daily totals, not per-app data)
+  try { renderKpis(days, days.map(d => rowTotal(d)), 'ov'); } catch (e) { console.error('KPI render error:', e); }
 
   const total = filtered.reduce((s, a) => s + rowTotal(a), 0);
   const numDays = Math.max(1, Math.round((to - from) / 86400));
@@ -260,9 +287,9 @@ async function loadOverview() {
 
   charts['ov'] = new Chart(canvas, {
     type: 'bar',
-    data: { 
-      labels: filtered.map(a => a.display_name), // Use display_name for labels
-      datasets 
+    data: {
+      labels: filtered.map(a => a.display_name),
+      datasets
     },
     options: {
       indexAxis: 'y',
@@ -275,13 +302,12 @@ async function loadOverview() {
           labels: { boxWidth: 10, font: { size: 11 } },
         },
         tooltip: {
-          callbacks: { 
-            // Show display name and actual bundle ID in tooltip for clarity
+          callbacks: {
             title: (items) => {
               const item = filtered[items[0].dataIndex];
               return item.display_name === item.app ? item.app : `${item.display_name} (${item.app})`;
             },
-            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}` 
+            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
           },
         },
       },
@@ -292,7 +318,6 @@ async function loadOverview() {
     },
   });
 
-  // Double-click anywhere on a row (bar or label) to rename
   canvas.ondblclick = (e) => {
     const chart = charts['ov'];
     if (!chart) return;
@@ -317,6 +342,7 @@ async function loadDaily() {
     document.getElementById('dy-total').textContent = '—';
     document.getElementById('dy-avg').textContent   = '—';
     document.getElementById('dy-peak').textContent  = '—';
+    document.getElementById('dy-kpi').style.display  = 'none';
     return;
   }
 
@@ -331,12 +357,45 @@ async function loadDaily() {
   showTabState('dy', 'data');
   destroyChart('dy');
 
-  const devKeys  = activeDeviceKeys();
+  try { renderKpis(days, totals, 'dy'); } catch (e) { console.error('KPI render error:', e); }
+
+  const targetSec = settings.dailyTargetHours ? settings.dailyTargetHours * 3600 : null;
+  const targetMin = settings.dailyTargetHours ? settings.dailyTargetHours * 60   : null;
+  const devKeys   = activeDeviceKeys();
+
   const datasets = devKeys.map(dev => ({
     label:           DEVICE_LABELS[dev],
     data:            days.map(d => Math.round((d[dev] || 0) / 60)),
-    backgroundColor: DEVICE_COLORS[dev],
+    backgroundColor: days.map((d, i) => {
+      if (targetSec && totals[i] > 0 && totals[i] <= targetSec) return '#34C759';
+      return DEVICE_COLORS[dev];
+    }),
   }));
+
+  // Inline plugin that draws the target threshold line
+  const targetLinePlugin = {
+    id: 'targetLine',
+    afterDraw(chart) {
+      if (!targetMin) return;
+      const { ctx, chartArea, scales: { y } } = chart;
+      const yPx = y.getPixelForValue(targetMin);
+      if (yPx < chartArea.top || yPx > chartArea.bottom) return;
+      ctx.save();
+      ctx.strokeStyle = '#FF3B30';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(chartArea.left, yPx);
+      ctx.lineTo(chartArea.right, yPx);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#FF3B30';
+      ctx.font = '600 10px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`Goal: ${fmtHours(targetSec)}`, chartArea.right, yPx - 5);
+      ctx.restore();
+    },
+  };
 
   charts['dy'] = new Chart(document.getElementById('dy-chart'), {
     type: 'bar',
@@ -359,7 +418,57 @@ async function loadDaily() {
         y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: '#f0f0f0' } },
       },
     },
+    plugins: [targetLinePlugin],
   });
+}
+
+// ── KPI section ───────────────────────────────────────────────────────────────
+
+function renderKpis(days, totals, prefix) {
+  const kpiSection = document.getElementById(`${prefix}-kpi`);
+  const target = settings.dailyTargetHours;
+  if (!target) { kpiSection.style.display = 'none'; return; }
+
+  const targetSec = target * 3600;
+  const daysWithData = totals.filter(t => t > 0).length;
+  if (daysWithData === 0) { kpiSection.style.display = 'none'; return; }
+
+  const onTarget = totals.filter(t => t > 0 && t <= targetSec).length;
+  const rate = Math.round(onTarget / daysWithData * 100);
+
+  // Best streak in the visible period
+  let bestStreak = 0, cur = 0;
+  for (const t of totals) {
+    if (t > 0 && t <= targetSec) { cur++; bestStreak = Math.max(bestStreak, cur); }
+    else if (t > 0) cur = 0;
+  }
+
+  // Current streak: count backwards from last day that has data
+  let currentStreak = 0;
+  for (let i = days.length - 1; i >= 0; i--) {
+    if (totals[i] === 0) continue;
+    if (totals[i] <= targetSec) currentStreak++;
+    else break;
+  }
+
+  const daysStr = n => n === 1 ? '1 day' : `${n} days`;
+
+  const onTargetEl = document.getElementById(`${prefix}-kpi-on-target`);
+  const rateEl     = document.getElementById(`${prefix}-kpi-rate`);
+  const streakEl   = document.getElementById(`${prefix}-kpi-streak`);
+  const bestEl     = document.getElementById(`${prefix}-kpi-best`);
+  if (!onTargetEl || !rateEl || !streakEl || !bestEl) return;
+
+  onTargetEl.textContent = `${onTarget} / ${daysWithData}`;
+  onTargetEl.className   = 'value' + (onTarget === daysWithData ? ' value-green' : '');
+
+  rateEl.textContent = `${rate}%`;
+  rateEl.className   = 'value' + (rate >= 80 ? ' value-green' : rate < 50 ? ' value-red' : '');
+
+  streakEl.textContent = daysStr(currentStreak);
+  bestEl.textContent   = daysStr(bestStreak);
+
+  kpiSection.style.display = '';
 }
 
 // ── Hourly ────────────────────────────────────────────────────────────────────
@@ -438,7 +547,6 @@ function showRenamePopover(item, clientX, clientY) {
 
   input.value = item.display_name;
 
-  // Position near the click, keeping it within the viewport
   const W = window.innerWidth, H = window.innerHeight;
   const PW = 260, PH = 110;
   popover.style.left = `${Math.min(clientX, W - PW - 12)}px`;
@@ -460,7 +568,6 @@ function showRenamePopover(item, clientX, clientY) {
     popover.style.display = 'none';
   }
 
-  // Wire up buttons (replace previous listeners each time)
   document.getElementById('rename-ok').onclick     = commit;
   document.getElementById('rename-cancel').onclick = cancel;
   input.onkeydown = (e) => {
@@ -512,16 +619,22 @@ async function refreshDevices() {
     state.hasData.iphone = types.includes('iphone');
     state.hasData.ipad   = types.includes('ipad');
   } catch { /* ignore */ }
-  // Mac is the local device — always mark as available so the pill is interactive
   if (!state.hasData.mac) state.hasData.mac = true;
   updateDevicePills();
 }
 
-// ── Logs modal ────────────────────────────────────────────────────────────────
+// ── Settings modal ────────────────────────────────────────────────────────────
 
-async function openLogs() {
-  const modal = document.getElementById('logs-modal');
+async function openSettings() {
+  const modal = document.getElementById('settings-modal');
   modal.style.display = 'flex';
+
+  // Populate target input
+  const ti = document.getElementById('target-input');
+  ti.value = settings.dailyTargetHours != null ? settings.dailyTargetHours : '';
+  document.getElementById('target-clear').style.display = settings.dailyTargetHours ? '' : 'none';
+
+  // Load collection history
   document.getElementById('logs-loading').style.display = '';
   document.getElementById('logs-nodata').style.display  = 'none';
   document.getElementById('logs-table').style.display   = 'none';
@@ -571,8 +684,18 @@ async function openLogs() {
   }
 }
 
-function closeLogs() {
-  document.getElementById('logs-modal').style.display = 'none';
+function closeSettings() {
+  document.getElementById('settings-modal').style.display = 'none';
+}
+
+function commitTarget() {
+  const raw = parseFloat(document.getElementById('target-input').value);
+  const prev = settings.dailyTargetHours;
+  settings.dailyTargetHours = (Number.isFinite(raw) && raw > 0 && raw <= 24) ? raw : null;
+  document.getElementById('target-clear').style.display = settings.dailyTargetHours ? '' : 'none';
+  document.getElementById('target-input').value = settings.dailyTargetHours != null ? settings.dailyTargetHours : '';
+  saveSettings();
+  if (prev !== settings.dailyTargetHours) loadCurrentTab();
 }
 
 // ── FDA ───────────────────────────────────────────────────────────────────────
@@ -592,14 +715,14 @@ async function checkFdaAndInit() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Subscribe to live progress pushes from main process during collection
+  loadSettings();
+
   window.api.onCollectProgress(async () => {
     await refreshLastRun();
     await refreshDevices();
     loadCurrentTab();
   });
 
-  // Check Full Disk Access before showing any data
   const fdaOk = await checkFdaAndInit();
   if (!fdaOk) return;
 
@@ -611,13 +734,12 @@ async function init() {
 // ── Event wiring ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Mode buttons (Day / Week / Month / Year)
+  // Mode buttons
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       state.mode   = btn.dataset.mode;
       state.offset = 0;
 
-      // If switching to "day" mode while on the "daily" tab, auto-switch to "overview"
       if (state.mode === 'day' && state.activeTab === 'daily') {
         switchTab('overview');
       }
@@ -628,7 +750,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Period navigation arrows
+  // Period navigation
   document.getElementById('nav-prev').addEventListener('click', () => {
     state.offset--;
     updatePeriodUI();
@@ -643,7 +765,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Period label click → jump to current period
   document.getElementById('period-label').addEventListener('click', () => {
     if (state.offset !== 0) {
       state.offset = 0;
@@ -668,17 +789,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Collect now button
+  // Collect now
   document.getElementById('collect-btn').addEventListener('click', triggerCollect);
 
-  // Logs modal
-  document.getElementById('logs-btn').addEventListener('click', openLogs);
-  document.getElementById('logs-close').addEventListener('click', closeLogs);
-  document.getElementById('logs-modal').addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeLogs(); // click on backdrop closes modal
+  // Settings modal
+  document.getElementById('settings-btn').addEventListener('click', openSettings);
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  document.getElementById('settings-modal').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeSettings();
   });
 
-  // Data Management
+  // Target input
+  const ti = document.getElementById('target-input');
+  ti.addEventListener('change', commitTarget);
+  ti.addEventListener('keydown', (e) => { if (e.key === 'Enter') { ti.blur(); commitTarget(); } });
+  document.getElementById('target-clear').addEventListener('click', () => {
+    document.getElementById('target-input').value = '';
+    commitTarget();
+  });
+
+  // Data management
   document.getElementById('export-btn').addEventListener('click', async () => {
     const result = await window.api.exportDb();
     if (result.ok) {
@@ -689,7 +819,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('import-btn').addEventListener('click', async () => {
-    // Note: The main process handles the confirmation dialog and restart
     const result = await window.api.importDb();
     if (result && !result.ok && result.error) {
       alert(`Import failed: ${result.error}`);
@@ -710,7 +839,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Set initial UI state from state object
+  // Set initial UI state
   updateModeButtons();
   updatePeriodUI();
 
