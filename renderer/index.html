@@ -303,6 +303,21 @@
     }
     .target-clear-btn:hover { color: #555; }
 
+    /* Toggle switch */
+    .toggle { position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0; background: #d5d5d5; border-radius: 20px;
+      transition: background 0.2s;
+    }
+    .toggle-track::after {
+      content: ''; position: absolute; left: 2px; top: 2px;
+      width: 16px; height: 16px; border-radius: 50%; background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: transform 0.2s;
+    }
+    .toggle input:checked + .toggle-track { background: #34C759; }
+    .toggle input:checked + .toggle-track::after { transform: translateX(16px); }
+
     /* Logs table */
     .logs-table { width: 100%; border-collapse: collapse; font-size: 14px; }
     .logs-table th {
@@ -384,8 +399,8 @@
     <div class="device-hint" id="device-hint" style="display:none">
       <span class="hint-icon">ⓘ</span>
       <div class="hint-tooltip">
-        <strong>iPhone &amp; iPad data not found.</strong><br>
-        On your iPhone: <strong>Settings → Screen Time</strong> → enable <strong>Share across devices</strong>. Then click Collect now.
+        <strong>iPhone &amp; iPad data unavailable.</strong><br>
+        On macOS 13+, Apple stores synced device Screen Time data in a protected sandbox that third-party apps cannot access — even with Full Disk Access. Only Mac usage is available.
       </div>
     </div>
   </div>
@@ -519,7 +534,7 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-label">Screen time target</div>
-          <div class="settings-sub">Mark days green &amp; show threshold line in charts</div>
+          <div class="settings-sub">Show threshold line in the daily chart</div>
         </div>
         <div class="settings-row-control">
           <input id="target-input" type="number" class="target-input"
@@ -528,12 +543,25 @@
           <button id="target-clear" class="target-clear-btn" style="display:none">Clear</button>
         </div>
       </div>
+      <div class="settings-row" id="ticks-row" style="display:none; margin-top:12px;">
+        <div class="settings-row-main">
+          <div class="settings-label">Show tick marks on chart</div>
+          <div class="settings-sub">Draw a ✓ above bars that meet the daily goal</div>
+        </div>
+        <div class="settings-row-control">
+          <label class="toggle">
+            <input type="checkbox" id="ticks-toggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <!-- Data Management -->
+
     <div class="settings-section">
       <div class="settings-section-title">Data</div>
-      <div style="display:flex; gap:10px;">
+      <div style="display:flex; gap:10px; margin-bottom:10px;">
         <button id="export-btn" class="fda-btn fda-btn-secondary" style="margin:0; flex:1; height:38px;">Export Backup…</button>
         <button id="import-btn" class="fda-btn fda-btn-secondary" style="margin:0; flex:1; height:38px;">Import Backup…</button>
       </div>

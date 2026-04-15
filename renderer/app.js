@@ -26,6 +26,7 @@ const state = {
 
 const settings = {
   dailyTargetHours: null,
+  showTargetTicks:  true,
 };
 
 const charts = {};
@@ -366,33 +367,57 @@ async function loadDaily() {
   const datasets = devKeys.map(dev => ({
     label:           DEVICE_LABELS[dev],
     data:            days.map(d => Math.round((d[dev] || 0) / 60)),
-    backgroundColor: days.map((d, i) => {
-      if (targetSec && totals[i] > 0 && totals[i] <= targetSec) return '#34C759';
-      return DEVICE_COLORS[dev];
-    }),
+    backgroundColor: DEVICE_COLORS[dev],
   }));
 
-  // Inline plugin that draws the target threshold line
+  // Inline plugin: threshold line + green tick marks above bars that meet the goal
   const targetLinePlugin = {
     id: 'targetLine',
     afterDraw(chart) {
-      if (!targetMin) return;
       const { ctx, chartArea, scales: { y } } = chart;
-      const yPx = y.getPixelForValue(targetMin);
-      if (yPx < chartArea.top || yPx > chartArea.bottom) return;
+
+      // ── Threshold line ────────────────────────────────────────────────────
+      if (targetMin) {
+        const yPx = y.getPixelForValue(targetMin);
+        if (yPx >= chartArea.top && yPx <= chartArea.bottom) {
+          ctx.save();
+          ctx.strokeStyle = '#FF3B30';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(chartArea.left, yPx);
+          ctx.lineTo(chartArea.right, yPx);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#FF3B30';
+          ctx.font = '600 10px -apple-system, BlinkMacSystemFont, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText(`Goal: ${fmtHours(targetSec)}`, chartArea.right, yPx - 5);
+          ctx.restore();
+        }
+      }
+
+      // ── Green tick marks above bars that meet the goal ────────────────────
+      if (!targetSec || !settings.showTargetTicks) return;
+      const meta = chart.getDatasetMeta(0);
+      if (!meta || !meta.data.length) return;
       ctx.save();
-      ctx.strokeStyle = '#FF3B30';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(chartArea.left, yPx);
-      ctx.lineTo(chartArea.right, yPx);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#FF3B30';
-      ctx.font = '600 10px -apple-system, BlinkMacSystemFont, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`Goal: ${fmtHours(targetSec)}`, chartArea.right, yPx - 5);
+      ctx.strokeStyle = '#34C759';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (let i = 0; i < days.length; i++) {
+        if (totals[i] <= 0 || totals[i] > targetSec) continue;
+        const totalMin = totals[i] / 60;
+        const barX = meta.data[i].x;
+        const topY  = y.getPixelForValue(totalMin) - 7;
+        const s = 4; // half-size of tick
+        ctx.beginPath();
+        ctx.moveTo(barX - s,       topY + s * 0.2);
+        ctx.lineTo(barX - s * 0.1, topY + s);
+        ctx.lineTo(barX + s,       topY - s * 0.6);
+        ctx.stroke();
+      }
       ctx.restore();
     },
   };
@@ -629,10 +654,12 @@ async function openSettings() {
   const modal = document.getElementById('settings-modal');
   modal.style.display = 'flex';
 
-  // Populate target input
+  // Populate target input + ticks toggle
   const ti = document.getElementById('target-input');
   ti.value = settings.dailyTargetHours != null ? settings.dailyTargetHours : '';
   document.getElementById('target-clear').style.display = settings.dailyTargetHours ? '' : 'none';
+  document.getElementById('ticks-row').style.display = settings.dailyTargetHours ? '' : 'none';
+  document.getElementById('ticks-toggle').checked = settings.showTargetTicks;
 
   // Load collection history
   document.getElementById('logs-loading').style.display = '';
@@ -693,6 +720,7 @@ function commitTarget() {
   const prev = settings.dailyTargetHours;
   settings.dailyTargetHours = (Number.isFinite(raw) && raw > 0 && raw <= 24) ? raw : null;
   document.getElementById('target-clear').style.display = settings.dailyTargetHours ? '' : 'none';
+  document.getElementById('ticks-row').style.display    = settings.dailyTargetHours ? '' : 'none';
   document.getElementById('target-input').value = settings.dailyTargetHours != null ? settings.dailyTargetHours : '';
   saveSettings();
   if (prev !== settings.dailyTargetHours) loadCurrentTab();
@@ -806,6 +834,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('target-clear').addEventListener('click', () => {
     document.getElementById('target-input').value = '';
     commitTarget();
+  });
+
+  document.getElementById('ticks-toggle').addEventListener('change', (e) => {
+    settings.showTargetTicks = e.target.checked;
+    saveSettings();
+    loadCurrentTab();
   });
 
   // Data management

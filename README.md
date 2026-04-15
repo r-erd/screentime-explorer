@@ -59,9 +59,9 @@ Apple's Screen Time database (`~/Library/Application Support/Knowledge/knowledge
 
 ## iPhone & iPad data
 
-On your iPhone or iPad: **Settings → Screen Time → Share Across Devices** → enable it.
+> **macOS 13+ limitation:** On Ventura and later, Apple moved synced device Screen Time data into a private, sandboxed database (`RMAdminStore-Cloud.sqlite`) that is protected beyond Full Disk Access — even `sudo` cannot read it. Only Apple's own ScreenTimeAgent process has access. **Screenlog can only show Mac usage data on macOS 13+.**
 
-Once enabled, Apple syncs usage data to your Mac via iCloud automatically. Click **Collect now** in the app after enabling it to pick up the data immediately.
+On macOS 12 (Monterey) and earlier, iPhone and iPad data is stored in `knowledgeC.db` alongside Mac data and is fully accessible. If you are on Monterey, enable **Settings → Screen Time → Share Across Devices** on your iPhone/iPad and click **Collect now**.
 
 ## Usage
 
