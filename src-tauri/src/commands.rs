@@ -181,3 +181,67 @@ pub async fn import_db(app: AppHandle, db_path_state: State<'_, DbPathState>) ->
         Err(e) => Ok(ImportResult { ok: false, error: Some(e.to_string()) }),
     }
 }
+
+// ── App drill-down ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_app_daily(app_id: String, from: i64, to: i64, state: State<'_, DbState>) -> Result<db::AppDailyResult, String> {
+    validate_ts(from, to)?;
+    if app_id.is_empty() || app_id.len() > 512 {
+        return Err("Invalid app_id".into());
+    }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_app_daily(&conn, &app_id, from, to).map_err(map_err)
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn show_notification(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(map_err)
+}
+
+// ── Autostart (launch at login) ───────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(map_err)
+}
+
+#[tauri::command]
+pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    if enabled { mgr.enable().map_err(map_err) } else { mgr.disable().map_err(map_err) }
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn save_csv(app: AppHandle, filename: String, content: String) -> Result<ExportResult, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let file = app.dialog()
+        .file()
+        .set_title("Export as CSV")
+        .set_file_name(&filename)
+        .add_filter("CSV", &["csv"])
+        .blocking_save_file();
+
+    match file {
+        Some(dest) => {
+            let dest_str = dest.to_string();
+            match std::fs::write(&dest_str, content) {
+                Ok(_) => Ok(ExportResult { ok: true, path: Some(dest_str), error: None }),
+                Err(e) => Ok(ExportResult { ok: false, path: None, error: Some(e.to_string()) }),
+            }
+        }
+        None => Ok(ExportResult { ok: false, path: None, error: None }),
+    }
+}

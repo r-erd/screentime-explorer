@@ -312,6 +312,32 @@ pub fn log_collection(conn: &Connection, ran_at: i64, fetched: i64, inserted: i6
     Ok(())
 }
 
+#[derive(Serialize, Clone, Default)]
+pub struct AppDailyRow {
+    pub date:  String,
+    pub total: i64,
+}
+
+#[derive(Serialize)]
+pub struct AppDailyResult {
+    pub days: Vec<AppDailyRow>,
+}
+
+pub fn get_app_daily(conn: &Connection, app_id: &str, from: i64, to: i64) -> SqlResult<AppDailyResult> {
+    let mut stmt = conn.prepare(
+        "SELECT DATE(start_time, 'unixepoch', 'localtime') AS day, \
+         CAST(SUM(usage_seconds) AS INTEGER) AS total \
+         FROM screentime \
+         WHERE app = ?1 AND start_time >= ?2 AND start_time <= ?3 \
+           AND usage_seconds > 0 \
+         GROUP BY day ORDER BY day ASC"
+    )?;
+    let days = stmt.query_map(params![app_id, from, to], |row| {
+        Ok(AppDailyRow { date: row.get(0)?, total: row.get(1)? })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(AppDailyResult { days })
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn unix_to_date_local(ts: i64) -> String {

@@ -2,12 +2,6 @@
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const DEVICE_COLORS = {
-  mac:    '#1d1d1f',
-  iphone: '#007AFF',
-  ipad:   '#34C759',
-};
-
 const DEVICE_LABELS = {
   mac:    'Mac',
   iphone: 'iPhone',
@@ -24,8 +18,10 @@ const state = {
 };
 
 const settings = {
-  dailyTargetHours: null,
-  showTargetTicks:  true,
+  dailyTargetHours:    null,
+  showTargetTicks:     true,
+  appearance:          'system',  // 'system' | 'light' | 'dark'
+  notificationsEnabled: false,
 };
 
 const charts = {};
@@ -43,6 +39,39 @@ function saveSettings() {
   try {
     localStorage.setItem('screenlog_settings', JSON.stringify(settings));
   } catch { /* ignore */ }
+}
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+
+function getEffectiveTheme() {
+  if (settings.appearance === 'dark')  return 'dark';
+  if (settings.appearance === 'light') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(reloadCharts = false) {
+  const theme = getEffectiveTheme();
+  document.documentElement.setAttribute('data-theme', theme);
+  Chart.defaults.color = theme === 'dark' ? '#8e8e93' : '#888888';
+  if (reloadCharts) loadCurrentTab();
+}
+
+// ── Device colors (theme-aware) ───────────────────────────────────────────────
+
+function getDeviceColors() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return {
+    mac:    dark ? '#e5e5e5' : '#1d1d1f',
+    iphone: '#007AFF',
+    ipad:   '#34C759',
+  };
+}
+
+// ── Chart grid helper ─────────────────────────────────────────────────────────
+
+function getChartGrid() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return dark ? '#3a3a3c' : '#f0f0f0';
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -228,6 +257,8 @@ function showTabState(prefix, tabState) {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
+let drilldownClickTimer = null;
+
 async function loadOverview() {
   showTabState('ov', 'loading');
   const [from, to] = getApiRange();
@@ -262,15 +293,16 @@ async function loadOverview() {
   destroyChart('ov');
 
   const devKeys  = activeDeviceKeys();
+  const colors   = getDeviceColors();
   const datasets = devKeys.map(dev => ({
     label:           DEVICE_LABELS[dev],
     data:            filtered.map(a => Math.round((a[dev] || 0) / 60)),
-    backgroundColor: DEVICE_COLORS[dev],
+    backgroundColor: colors[dev],
   }));
 
   const canvas = document.getElementById('ov-chart');
   canvas.style.height = `${Math.max(280, filtered.length * 28)}px`;
-  canvas.title = 'Double-click any row to rename';
+  canvas.title = 'Click any row to see history; double-click to rename';
 
   charts['ov'] = new Chart(canvas, {
     type: 'bar',
@@ -299,13 +331,25 @@ async function loadOverview() {
         },
       },
       scales: {
-        x: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: '#f0f0f0' } },
+        x: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
         y: { stacked: true, ticks: { font: { size: 12 } } },
       },
     },
   });
 
+  // Single click → drill-down (with delay to allow double-click detection)
+  charts['ov'].options.onClick = (event, elements) => {
+    if (!elements.length) return;
+    clearTimeout(drilldownClickTimer);
+    const idx = elements[0].index;
+    drilldownClickTimer = setTimeout(() => {
+      showAppDrilldown(filtered[idx], from, to);
+    }, 220);
+  };
+
+  // Double-click → rename (cancels pending drill-down)
   canvas.ondblclick = (e) => {
+    clearTimeout(drilldownClickTimer);
     const chart = charts['ov'];
     if (!chart) return;
     const index = Math.round(chart.scales.y.getValueForPixel(e.offsetY));
@@ -349,11 +393,12 @@ async function loadDaily() {
   const targetSec = settings.dailyTargetHours ? settings.dailyTargetHours * 3600 : null;
   const targetMin = settings.dailyTargetHours ? settings.dailyTargetHours * 60   : null;
   const devKeys   = activeDeviceKeys();
+  const colors    = getDeviceColors();
 
   const datasets = devKeys.map(dev => ({
     label:           DEVICE_LABELS[dev],
     data:            days.map(d => Math.round((d[dev] || 0) / 60)),
-    backgroundColor: DEVICE_COLORS[dev],
+    backgroundColor: colors[dev],
   }));
 
   // Inline plugin: threshold line + green tick marks above bars that meet the goal
@@ -426,7 +471,7 @@ async function loadDaily() {
       },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: '#f0f0f0' } },
+        y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
     plugins: [targetLinePlugin],
@@ -520,10 +565,11 @@ async function loadHourly() {
   destroyChart('hr');
 
   const devKeys  = activeDeviceKeys();
+  const colors   = getDeviceColors();
   const datasets = devKeys.map(dev => ({
     label:           DEVICE_LABELS[dev],
     data:            avgd.map(h => Math.round((h[dev] || 0) / 60)),
-    backgroundColor: DEVICE_COLORS[dev],
+    backgroundColor: colors[dev],
   }));
 
   charts['hr'] = new Chart(document.getElementById('hr-chart'), {
@@ -544,7 +590,7 @@ async function loadHourly() {
       },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: '#f0f0f0' } },
+        y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
   });
@@ -585,6 +631,139 @@ function showRenamePopover(item, clientX, clientY) {
     if (e.key === 'Enter')  commit();
     if (e.key === 'Escape') cancel();
   };
+}
+
+// ── App drill-down modal ──────────────────────────────────────────────────────
+
+function closeDrilldown() {
+  document.getElementById('drilldown-modal').style.display = 'none';
+  destroyChart('dd');
+}
+
+async function showAppDrilldown(app, from, to) {
+  const modal    = document.getElementById('drilldown-modal');
+  const titleEl  = document.getElementById('drilldown-title');
+  const subEl    = document.getElementById('drilldown-subtitle');
+  const loadEl   = document.getElementById('drilldown-loading');
+  const nodataEl = document.getElementById('drilldown-nodata');
+  const wrapEl   = document.getElementById('drilldown-wrap');
+
+  titleEl.textContent = app.display_name;
+  subEl.textContent   = app.app !== app.display_name ? app.app : '';
+  loadEl.style.display   = '';
+  nodataEl.style.display = 'none';
+  wrapEl.style.display   = 'none';
+  modal.style.display    = 'flex';
+  destroyChart('dd');
+
+  try {
+    const { days } = await window.api.getAppDaily(app.app, from, to);
+    loadEl.style.display = 'none';
+
+    if (!days || !days.length || days.every(d => d.total === 0)) {
+      nodataEl.style.display = '';
+      return;
+    }
+
+    wrapEl.style.display = '';
+    const colors = getDeviceColors();
+    const grid   = getChartGrid();
+
+    charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
+      type: 'bar',
+      data: {
+        labels:   days.map(d => fmtDate(d.date)),
+        datasets: [{ label: app.display_name, data: days.map(d => Math.round(d.total / 60)), backgroundColor: colors.mac }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => ` ${fmtHours(ctx.raw * 60)}` } },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: { ticks: { callback: v => fmtHours(v * 60) }, grid: { color: grid } },
+        },
+      },
+    });
+  } catch (e) {
+    loadEl.style.display = 'none';
+    nodataEl.style.display = '';
+    console.error('Drilldown error:', e);
+  }
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+async function exportCsv() {
+  const [from, to] = getApiRange();
+  let csv, filename;
+  const ts = new Date().toISOString().slice(0, 10);
+
+  if (state.activeTab === 'overview') {
+    const { apps } = await window.api.getScreentime(from, to);
+    const rows = apps.filter(a => rowTotal(a) > 0);
+    csv = 'App ID,Display Name,Total Minutes,Mac Minutes,iPhone Minutes,iPad Minutes\n' +
+      rows.map(a =>
+        `"${a.app}","${a.display_name}",${Math.round(rowTotal(a)/60)},` +
+        `${Math.round((a.mac||0)/60)},${Math.round((a.iphone||0)/60)},${Math.round((a.ipad||0)/60)}`
+      ).join('\n');
+    filename = `screenlog_overview_${ts}.csv`;
+  } else if (state.activeTab === 'daily') {
+    const { days } = await window.api.getDaily(from, to);
+    csv = 'Date,Total Minutes,Mac Minutes,iPhone Minutes,iPad Minutes\n' +
+      days.map(d =>
+        `${d.date},${Math.round(rowTotal(d)/60)},` +
+        `${Math.round((d.mac||0)/60)},${Math.round((d.iphone||0)/60)},${Math.round((d.ipad||0)/60)}`
+      ).join('\n');
+    filename = `screenlog_daily_${ts}.csv`;
+  } else {
+    const { hours, num_days } = await window.api.getHourly(from, to);
+    csv = 'Hour,Avg Minutes\n' +
+      hours.map(h => `${fmtHour(h.hour)},${Math.round(rowTotal(h)/60/num_days)}`).join('\n');
+    filename = `screenlog_hourly_${ts}.csv`;
+  }
+  await window.api.saveCsv(filename, csv);
+}
+
+// ── Notification check ────────────────────────────────────────────────────────
+
+async function checkGoalNotifications() {
+  if (!settings.notificationsEnabled || !settings.dailyTargetHours) return;
+
+  const today = new Date().toISOString().slice(0, 10);
+  let ns = {};
+  try { ns = JSON.parse(localStorage.getItem('notifState') || '{}'); } catch {}
+  if (ns.date !== today) ns = { date: today, halfFired: false, fullFired: false };
+  if (ns.halfFired && ns.fullFired) return;
+
+  const targetSec = settings.dailyTargetHours * 3600;
+  const todayStart = Math.floor(new Date(today + 'T00:00:00').getTime() / 1000);
+  const todayEnd   = todayStart + 86399;
+
+  try {
+    const { days } = await window.api.getDaily(todayStart, todayEnd);
+    if (!days || !days.length) return;
+    const d = days[days.length - 1];
+    const total = (d.mac || 0) + (d.iphone || 0) + (d.ipad || 0);
+
+    if (!ns.fullFired && total >= targetSec) {
+      await window.api.showNotification(
+        'Screen Time Limit Reached',
+        `You've used ${fmtHours(total)} today — your ${settings.dailyTargetHours}h limit has been exceeded.`
+      );
+      ns.halfFired = true;
+      ns.fullFired = true;
+    } else if (!ns.halfFired && total >= targetSec * 0.5) {
+      await window.api.showNotification(
+        'Screen Time Warning — 50%',
+        `You've used ${fmtHours(total)} today, halfway to your ${settings.dailyTargetHours}h daily limit.`
+      );
+      ns.halfFired = true;
+    }
+    localStorage.setItem('notifState', JSON.stringify(ns));
+  } catch { /* ignore */ }
 }
 
 // ── Collect button ────────────────────────────────────────────────────────────
@@ -645,6 +824,21 @@ async function openSettings() {
   document.getElementById('target-clear').style.display = settings.dailyTargetHours ? '' : 'none';
   document.getElementById('ticks-row').style.display = settings.dailyTargetHours ? '' : 'none';
   document.getElementById('ticks-toggle').checked = settings.showTargetTicks;
+
+  // Appearance
+  document.querySelectorAll('#appearance-ctrl .seg-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.val === settings.appearance);
+  });
+
+  // Launch at login
+  try {
+    const enabled = await window.api.getAutostart();
+    document.getElementById('login-toggle').checked = enabled;
+  } catch { document.getElementById('login-toggle').checked = false; }
+
+  // Notifications
+  document.getElementById('notif-toggle').checked = settings.notificationsEnabled;
+  document.getElementById('notif-no-goal').style.display = settings.dailyTargetHours ? 'none' : '';
 
   // Load collection history
   document.getElementById('logs-loading').style.display = '';
@@ -707,6 +901,8 @@ function commitTarget() {
   document.getElementById('target-clear').style.display = settings.dailyTargetHours ? '' : 'none';
   document.getElementById('ticks-row').style.display    = settings.dailyTargetHours ? '' : 'none';
   document.getElementById('target-input').value = settings.dailyTargetHours != null ? settings.dailyTargetHours : '';
+  // Update notif-no-goal hint visibility
+  document.getElementById('notif-no-goal').style.display = settings.dailyTargetHours ? 'none' : '';
   saveSettings();
   if (prev !== settings.dailyTargetHours) loadCurrentTab();
 }
@@ -729,11 +925,13 @@ async function checkFdaAndInit() {
 
 async function init() {
   loadSettings();
+  applyTheme(); // apply before any rendering
 
   window.api.onCollectProgress(async () => {
     await refreshLastRun();
     await refreshDevices();
     loadCurrentTab();
+    checkGoalNotifications();
   });
 
   const fdaOk = await checkFdaAndInit();
@@ -747,6 +945,11 @@ async function init() {
 // ── Event wiring ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  // System theme changes
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (settings.appearance === 'system') applyTheme(true);
+  });
+
   // Mode buttons
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -845,6 +1048,38 @@ document.addEventListener('DOMContentLoaded', () => {
       await refreshLastRun();
       loadCurrentTab();
     }
+  });
+
+  // Appearance segmented control
+  document.querySelectorAll('#appearance-ctrl .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      settings.appearance = btn.dataset.val;
+      saveSettings();
+      document.querySelectorAll('#appearance-ctrl .seg-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.val === settings.appearance));
+      applyTheme(true);
+    });
+  });
+
+  // Launch at login toggle
+  document.getElementById('login-toggle').addEventListener('change', async (e) => {
+    try { await window.api.setAutostart(e.target.checked); }
+    catch (err) { console.error('Autostart error:', err); e.target.checked = !e.target.checked; }
+  });
+
+  // Notifications toggle
+  document.getElementById('notif-toggle').addEventListener('change', (e) => {
+    settings.notificationsEnabled = e.target.checked;
+    saveSettings();
+  });
+
+  // CSV export
+  document.getElementById('csv-btn').addEventListener('click', exportCsv);
+
+  // Drill-down close
+  document.getElementById('drilldown-close').addEventListener('click', closeDrilldown);
+  document.getElementById('drilldown-modal').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeDrilldown();
   });
 
   // Set initial UI state

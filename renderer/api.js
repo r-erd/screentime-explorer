@@ -46,5 +46,12 @@
       // Return unsubscribe function
       return () => { if (unlisten) unlisten(); };
     },
+
+    // ── Extended API ──────────────────────────────────────────────────────────
+    getAppDaily:      (appId, from, to) => inv('get_app_daily', { app_id: appId, from, to }),
+    showNotification: (title, body)     => inv('show_notification', { title, body }),
+    getAutostart:     ()                => inv('get_autostart', {}),
+    setAutostart:     (enabled)         => inv('set_autostart', { enabled }),
+    saveCsv:          (filename, content) => inv('save_csv', { filename, content }),
   };
 })();

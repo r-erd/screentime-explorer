@@ -66,6 +66,13 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // ── Plugins ───────────────────────────────────────────────────────
+            app.handle().plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent, None,
+            ))?;
+            app.handle().plugin(tauri_plugin_notification::init())?;
+            app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
+
             // ── Scheduler ─────────────────────────────────────────────────────
             scheduler::start_scheduler(app.handle().clone(), shared_conn);
 
@@ -83,6 +90,11 @@ fn main() {
             commands::update_app_name,
             commands::export_db,
             commands::import_db,
+            commands::get_app_daily,
+            commands::show_notification,
+            commands::get_autostart,
+            commands::set_autostart,
+            commands::save_csv,
         ])
         .on_window_event(|window, event| {
             // Hide instead of close — app lives in the menu bar

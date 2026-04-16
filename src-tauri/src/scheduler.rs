@@ -46,14 +46,7 @@ pub fn start_scheduler(app: AppHandle, conn: Arc<Mutex<Connection>>) {
 
         loop {
             thread::sleep(Duration::from_secs(30));
-
-            let elapsed = last_ran.elapsed();
-            // Collect if 1 hour has passed OR if we detect a large elapsed time
-            // (e.g., sleep/wake: the thread was paused for a long time)
-            let slept_long = elapsed > Duration::from_secs(60);
-            let hour_passed = elapsed >= INTERVAL;
-
-            if hour_passed || (slept_long && elapsed > Duration::from_secs(120)) {
+            if last_ran.elapsed() >= INTERVAL {
                 run_collect(&app, conn.clone());
                 last_ran = Instant::now();
             }
