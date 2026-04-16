@@ -114,6 +114,17 @@ macOS continuously writes Screen Time data to `~/Library/Application Support/Kno
 
 Collection runs on startup, every hour, and on every wake from sleep.
 
+## Creating a release
+
+1. Update `"version"` in `src-tauri/tauri.conf.json`
+2. Commit and push to main
+3. Tag the commit and push the tag:
+   ```bash
+   git tag v1.2.0
+   git push origin v1.2.0
+   ```
+4. GitHub Actions builds the DMG and publishes it as a GitHub Release automatically.
+
 ## Security
 
 - `knowledgeC.db` is opened **read-only** — the app never writes to Apple's database
