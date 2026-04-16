@@ -1,57 +1,11 @@
-name: Build & Release
+name: Release
 
 on:
   push:
-    branches: [main]
-    tags:     ['v*']
-  pull_request:
-    branches: [main]
+    tags: ['v*']
 
 jobs:
-  build:
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Build Tauri app
-        run: npm run build -- --bundles app
-        env:
-          CI: true
-
-      - name: Zip app bundle (CI artifact)
-        run: |
-          cd src-tauri/target/release/bundle/macos
-          zip -r --symlinks "Screenlog-${{ github.sha }}.zip" Screenlog.app
-
-      - name: Upload app bundle (every build)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Screenlog-${{ github.sha }}
-          path: src-tauri/target/release/bundle/macos/Screenlog-${{ github.sha }}.zip
-          retention-days: 14
-
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
     runs-on: macos-latest
 
     permissions:
