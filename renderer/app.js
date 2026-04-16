@@ -76,6 +76,15 @@ function getChartGrid() {
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
+// Pick a y-axis step size (in minutes) from allowed values so the result
+// is always a round interval — never 20 min or 1h 20min.
+function niceStepMin(maxValueMin) {
+  for (const s of [30, 60, 120, 240]) {
+    if (maxValueMin / s <= 6) return s;
+  }
+  return 240;
+}
+
 function fmtHours(seconds) {
   if (!seconds || seconds < 1) return '0m';
   const h = Math.floor(seconds / 3600);
@@ -471,7 +480,7 @@ async function loadDaily() {
       },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        y: { stacked: true, suggestedMax: targetMin ?? undefined, ticks: { stepSize: niceStepMin(Math.max(targetMin ?? 0, Math.max(...totals.map(t => t / 60)))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
     plugins: [targetLinePlugin],
@@ -590,7 +599,7 @@ async function loadHourly() {
       },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        y: { stacked: true, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
   });
@@ -683,7 +692,7 @@ async function showAppDrilldown(app, from, to) {
         },
         scales: {
           x: { grid: { display: false }, ticks: { font: { size: 11 } } },
-          y: { ticks: { callback: v => fmtHours(v * 60) }, grid: { color: grid } },
+          y: { ticks: { stepSize: niceStepMin(Math.max(...days.map(d => d.total / 60))), callback: v => fmtHours(v * 60) }, grid: { color: grid } },
         },
       },
     });
