@@ -20,7 +20,6 @@ const state = {
   mode:      'week',  // day | week | month | year
   offset:    0,       // 0 = current period, -1 = previous, etc.
   activeTab: 'overview',
-  devices:   { mac: true, iphone: true, ipad: true },
   hasData:   { mac: false, iphone: false, ipad: false },
 };
 
@@ -170,7 +169,7 @@ function destroyChart(id) {
 }
 
 function activeDeviceKeys() {
-  return ['mac', 'iphone', 'ipad'].filter(d => state.devices[d] && state.hasData[d]);
+  return ['mac', 'iphone', 'ipad'].filter(d => state.hasData[d]);
 }
 
 function rowTotal(row) {
@@ -205,19 +204,6 @@ function updateModeButtons() {
   }
 }
 
-function updateDevicePills() {
-  document.querySelectorAll('.device-pill').forEach(pill => {
-    const dev = pill.dataset.device;
-    const available = state.hasData[dev];
-    const active    = state.devices[dev];
-    pill.classList.toggle('unavailable', !available);
-    pill.classList.toggle('off', available && !active);
-  });
-
-  // Show hint icon if any non-mac device is missing from DB
-  const anyMissing = !state.hasData.iphone || !state.hasData.ipad;
-  document.getElementById('device-hint').style.display = anyMissing ? 'flex' : 'none';
-}
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
@@ -645,7 +631,6 @@ async function refreshDevices() {
     state.hasData.ipad   = types.includes('ipad');
   } catch { /* ignore */ }
   if (!state.hasData.mac) state.hasData.mac = true;
-  updateDevicePills();
 }
 
 // ── Settings modal ────────────────────────────────────────────────────────────
@@ -804,17 +789,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Tab buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-  });
-
-  // Device filter pills
-  document.querySelectorAll('.device-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      const dev = pill.dataset.device;
-      if (!state.hasData[dev]) return;
-      state.devices[dev] = !state.devices[dev];
-      updateDevicePills();
-      loadCurrentTab();
-    });
   });
 
   // Collect now

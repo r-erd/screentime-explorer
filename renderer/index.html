@@ -82,7 +82,7 @@
     }
     /* All interactive elements inside the drag region must opt out */
     header button, header input, header .mode-group, header .period-nav,
-    header .collect-wrap, header .device-filters, header .device-pill {
+    header .collect-wrap {
       -webkit-app-region: no-drag;
     }
     header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
@@ -159,47 +159,11 @@
     }
     #settings-btn:hover { border-color: #999; color: #1d1d1f; }
 
-    .device-filters { display: flex; gap: 7px; align-items: center; }
-    .device-pill {
-      display: flex; align-items: center; gap: 5px;
-      padding: 4px 11px 4px 8px; border-radius: 20px;
-      border: 1.5px solid transparent; cursor: pointer;
-      font-size: 12px; font-weight: 500;
-      transition: opacity 0.12s; user-select: none;
-    }
-    .device-pill .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .device-pill[data-device="mac"]    { border-color: #1d1d1f; color: #1d1d1f; }
-    .device-pill[data-device="iphone"] { border-color: #007AFF; color: #007AFF; }
-    .device-pill[data-device="ipad"]   { border-color: #34C759; color: #34C759; }
-    .device-pill[data-device="mac"]    .dot { background: #1d1d1f; }
-    .device-pill[data-device="iphone"] .dot { background: #007AFF; }
-    .device-pill[data-device="ipad"]   .dot { background: #34C759; }
-    .device-pill.off { opacity: 0.3; }
-    .device-pill.unavailable {
-      opacity: 0.35; border-style: dashed; cursor: default; pointer-events: none;
-    }
-
-    .device-hint { position: relative; display: flex; align-items: center; }
-    .hint-icon {
-      font-size: 14px; color: #bbb; cursor: pointer;
-      width: 22px; height: 22px; display: flex; align-items: center;
-      justify-content: center; border-radius: 50%;
-      transition: color 0.12s; user-select: none;
-    }
-    .hint-icon:hover { color: #888; }
-    .hint-tooltip {
-      display: none; position: absolute; right: 0; top: calc(100% + 10px);
-      background: #1d1d1f; color: white; font-size: 12px; line-height: 1.6;
-      padding: 11px 14px; border-radius: 10px; width: 260px; z-index: 200;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.25); pointer-events: none;
-    }
-    .hint-tooltip::before {
-      content: ''; position: absolute; top: -5px; right: 8px;
-      width: 0; height: 0;
-      border-left: 5px solid transparent; border-right: 5px solid transparent;
-      border-bottom: 5px solid #1d1d1f;
-    }
-    .device-hint:hover .hint-tooltip { display: block; }
+    /* device colour dot — used in chart legends only */
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .dot-mac    { background: #1d1d1f; }
+    .dot-iphone { background: #007AFF; }
+    .dot-ipad   { background: #34C759; }
 
     /* ── Tabs ── */
     nav.tabs {
@@ -296,6 +260,14 @@
     .settings-row-main .settings-label { font-size: 14px; font-weight: 500; color: #1d1d1f; }
     .settings-row-main .settings-sub { font-size: 12px; color: #999; margin-top: 2px; }
     .settings-row-control { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .settings-info-box {
+      font-size: 13px; line-height: 1.6; color: #555;
+      background: #f7f7f7; border-radius: 9px; padding: 13px 15px;
+    }
+    .settings-info-box code {
+      font-family: ui-monospace, monospace; font-size: 11.5px;
+      background: #e8e8e8; padding: 1px 5px; border-radius: 4px;
+    }
     .target-input {
       width: 64px; padding: 6px 8px; font-size: 14px; font-family: inherit;
       border: 1.5px solid #d5d5d5; border-radius: 7px; outline: none; text-align: right;
@@ -350,7 +322,6 @@
       .stats { grid-template-columns: 1fr 1fr; }
       .stat-card:last-child { grid-column: span 2; }
       .kpi-grid { grid-template-columns: 1fr 1fr; }
-      .device-filters { margin-left: 0; }
       #period-label { min-width: 120px; font-size: 13px; }
     }
   </style>
@@ -401,18 +372,6 @@
     <button id="settings-btn" title="Settings">⚙</button>
   </div>
 
-  <div class="device-filters" id="device-filters">
-    <div class="device-pill" data-device="mac"><span class="dot"></span>Mac</div>
-    <div class="device-pill" data-device="iphone"><span class="dot"></span>iPhone</div>
-    <div class="device-pill" data-device="ipad"><span class="dot"></span>iPad</div>
-    <div class="device-hint" id="device-hint" style="display:none">
-      <span class="hint-icon">ⓘ</span>
-      <div class="hint-tooltip">
-        <strong>iPhone &amp; iPad data unavailable.</strong><br>
-        On macOS 13+, Apple stores synced device Screen Time data in a protected sandbox that third-party apps cannot access — even with Full Disk Access. Only Mac usage is available.
-      </div>
-    </div>
-  </div>
 </header>
 
 <nav class="tabs">
@@ -573,6 +532,25 @@
       <div style="display:flex; gap:10px; margin-bottom:10px;">
         <button id="export-btn" class="fda-btn fda-btn-secondary" style="margin:0; flex:1; height:38px;">Export Backup…</button>
         <button id="import-btn" class="fda-btn fda-btn-secondary" style="margin:0; flex:1; height:38px;">Import Backup…</button>
+      </div>
+    </div>
+
+    <!-- iPhone & iPad -->
+    <div class="settings-section">
+      <div class="settings-section-title">iPhone &amp; iPad Data</div>
+      <div class="settings-info-box">
+        <strong>Only Mac usage is available on macOS 13+.</strong><br>
+        Apple moved synced device Screen Time data into a private, sandboxed database
+        (<code>RMAdminStore-Cloud.sqlite</code>) that is protected beyond Full Disk Access —
+        only Apple's own ScreenTimeAgent process can read it. This is an Apple limitation
+        that cannot be worked around.
+        <br><br>
+        Colors in charts still distinguish between devices if data is present:
+        <span style="display:inline-flex; align-items:center; gap:4px; margin-top:4px;">
+          <span class="dot dot-mac"></span> Mac &nbsp;
+          <span class="dot dot-iphone"></span> iPhone &nbsp;
+          <span class="dot dot-ipad"></span> iPad
+        </span>
       </div>
     </div>
 
