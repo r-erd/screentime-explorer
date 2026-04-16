@@ -53,5 +53,6 @@
     getAutostart:     ()                => inv('get_autostart', {}),
     setAutostart:     (enabled)         => inv('set_autostart', { enabled }),
     saveCsv:          (filename, content) => inv('save_csv', { filename, content }),
+    startDrag:        ()                  => inv('start_drag', {}),
   };
 })();

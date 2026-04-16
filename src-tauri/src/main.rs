@@ -95,6 +95,7 @@ fn main() {
             commands::get_autostart,
             commands::set_autostart,
             commands::save_csv,
+            commands::start_drag,
         ])
         .on_window_event(|window, event| {
             // Hide instead of close — app lives in the menu bar

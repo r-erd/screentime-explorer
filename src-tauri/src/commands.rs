@@ -222,6 +222,13 @@ pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
     if enabled { mgr.enable().map_err(map_err) } else { mgr.disable().map_err(map_err) }
 }
 
+// ── Window drag ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn start_drag(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(map_err)
+}
+
 // ── CSV export ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
