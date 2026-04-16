@@ -77,6 +77,13 @@
       gap: 16px;
       flex-wrap: wrap;
       -webkit-app-region: drag;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* All interactive elements inside the drag region must opt out */
+    header button, header input, header .mode-group, header .period-nav,
+    header .collect-wrap, header .device-filters, header .device-pill {
+      -webkit-app-region: no-drag;
     }
     header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
 
@@ -368,7 +375,7 @@
   </div>
 </div>
 
-<header>
+<header data-tauri-drag-region>
   <h1>Screenlog</h1>
 
   <div class="mode-group">
