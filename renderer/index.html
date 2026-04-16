@@ -10,10 +10,12 @@
     - frame-src 'none'    → no iframes
   -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self';">
+    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'ipc:' asset: https://asset.localhost; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self';">
   <title>Screenlog</title>
   <!-- Chart.js is bundled locally — never loaded from a CDN -->
   <script src="chart.umd.js"></script>
+  <!-- Tauri API bridge — must load before app.js -->
+  <script src="api.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 

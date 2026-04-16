@@ -1,9 +1,10 @@
 # Dependency directories
 node_modules/
 
-# Build artifacts (Electron-builder output)
+# Build artifacts
 dist/
 build/
+src-tauri/target/
 
 # Local database files and logs
 *.db

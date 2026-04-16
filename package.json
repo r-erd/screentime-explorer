@@ -1,61 +1,13 @@
 {
-  "name": "screentime-check",
-  "productName": "Screenlog",
+  "name": "screenlog",
   "version": "1.0.0",
   "description": "macOS Screen Time dashboard in your menu bar",
-  "main": "src/main/index.js",
   "scripts": {
-    "copy-chartjs": "node -e \"require('fs').copyFileSync('node_modules/chart.js/dist/chart.umd.js','renderer/chart.umd.js')\"",
-    "postinstall": "electron-builder install-app-deps && npm run copy-chartjs",
-    "start": "electron .",
-    "build": "npm run copy-chartjs && electron-builder --mac --arm64",
-    "build:x64": "npm run copy-chartjs && electron-builder --mac --x64",
-    "build:universal": "npm run copy-chartjs && electron-builder --mac --universal"
-  },
-  "dependencies": {
-    "better-sqlite3": "^9.6.0"
+    "dev":   "tauri dev",
+    "build": "tauri build",
+    "icon":  "tauri icon assets/screentime_app.png"
   },
   "devDependencies": {
-    "chart.js": "4.4.0",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.3",
-    "@electron/rebuild": "^3.6.0"
-  },
-  "build": {
-    "appId": "com.screentime-check.app",
-    "productName": "Screenlog",
-    "copyright": "Copyright © 2026",
-    "files": [
-      "src/**/*",
-      "renderer/**/*",
-      "assets/**/*"
-    ],
-    "asar": true,
-    "asarUnpack": [
-      "node_modules/better-sqlite3/**/*",
-      "assets/iconTemplate.png",
-      "assets/iconTemplate@2x.png"
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "icon": "assets/icon.icns",
-      "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
-      ],
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "assets/entitlements.plist",
-      "entitlementsInherit": "assets/entitlements.plist",
-      "extendInfo": {
-        "LSUIElement": true
-      }
-    },
-    "dmg": {
-      "title": "Screenlog",
-      "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
-      ]
-    }
+    "@tauri-apps/cli": "^2"
   }
 }
