@@ -33,17 +33,20 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        run: npm run build
+        run: npm run tauri build -- --bundles app
         env:
-          # Disable code-signing for CI builds
-          # (packaged app requires right-click > Open on first launch)
           CI: true
+
+      - name: Zip app bundle (CI artifact)
+        run: |
+          cd src-tauri/target/release/bundle/macos
+          zip -r --symlinks "Screenlog-${{ github.sha }}.zip" Screenlog.app
 
       - name: Upload app bundle (every build)
         uses: actions/upload-artifact@v4
         with:
           name: Screenlog-${{ github.sha }}
-          path: src-tauri/target/release/bundle/macos/Screenlog.app
+          path: src-tauri/target/release/bundle/macos/Screenlog-${{ github.sha }}.zip
           retention-days: 14
 
   release:
@@ -75,27 +78,28 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build Tauri app
-        run: npm run build
+      - name: Build Tauri app + DMG
+        run: npm run tauri build -- --bundles app,dmg
         env:
           CI: true
 
-      - name: Zip app bundle
+      - name: Rename DMG
         run: |
-          cd src-tauri/target/release/bundle/macos
-          zip -r --symlinks "Screenlog-${{ github.ref_name }}.zip" Screenlog.app
-          echo "ZIP_PATH=$(pwd)/Screenlog-${{ github.ref_name }}.zip" >> "$GITHUB_ENV"
+          DMG=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | head -1)
+          NEW="src-tauri/target/release/bundle/dmg/Screenlog-${{ github.ref_name }}.dmg"
+          mv "$DMG" "$NEW"
+          echo "DMG_PATH=$NEW" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ZIP_PATH }}
+          files: ${{ env.DMG_PATH }}
           generate_release_notes: true
           body: |
             ## Install
 
-            1. Download `Screenlog-${{ github.ref_name }}.zip` below and unzip it.
-            2. Move **Screenlog.app** to your Applications folder.
+            1. Download `Screenlog-${{ github.ref_name }}.dmg` below.
+            2. Open the DMG, drag **Screenlog.app** to your Applications folder.
             3. On first launch, right-click → **Open** (required once because the app is not notarised).
             4. Grant **Full Disk Access** in System Settings → Privacy & Security when prompted.
 
