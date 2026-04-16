@@ -1086,5 +1086,21 @@ document.addEventListener('DOMContentLoaded', () => {
   updateModeButtons();
   updatePeriodUI();
 
+  // ── Window drag ───────────────────────────────────────────────────────────
+  // data-tauri-drag-region alone is unreliable when controls fill most of the
+  // header. Use startDragging() explicitly on mousedown in non-interactive zones.
+  document.querySelector('header').addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // left button only
+    if (e.target.closest('button, input, select, textarea, a, .mode-group, .period-nav, .collect-wrap')) return;
+    try {
+      const tauriWindow = window.__TAURI__?.window ?? window.__TAURI__?.webviewWindow;
+      if (tauriWindow?.getCurrentWindow) {
+        tauriWindow.getCurrentWindow().startDragging();
+      } else if (window.__TAURI__?.core?.invoke) {
+        window.__TAURI__.core.invoke('plugin:window|start_dragging');
+      }
+    } catch (_) {}
+  });
+
   init();
 });
