@@ -150,6 +150,5 @@ fn show_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
-        let _ = win.center();
     }
 }
