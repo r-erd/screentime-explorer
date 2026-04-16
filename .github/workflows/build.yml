@@ -33,7 +33,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        run: npm run tauri build -- --bundles app
+        run: npm run build -- --bundles app
         env:
           CI: true
 
@@ -79,7 +79,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app + DMG
-        run: npm run tauri build -- --bundles app,dmg
+        run: npm run build -- --bundles app,dmg
         env:
           CI: true
 

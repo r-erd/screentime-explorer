@@ -1,21 +1,33 @@
 # Screenlog
 
-A macOS menu bar app that visualises your Screen Time data. No cloud, no Python, no server — everything stays on your Mac.
+A lightweight macOS menu bar app that visualises your Screen Time data.
+No cloud, no Python, no server — everything stays on your Mac.
 
 Built with [Tauri v2](https://tauri.app) (Rust backend + system WKWebView). The entire app bundle is **~6 MB**.
+
+## Why Screenlog instead of the built-in Screen Time app?
+
+macOS has a Screen Time panel in System Settings, but it is designed for parental controls and gives you almost no analytical power as a regular user:
+
+- **No history beyond a week** — you cannot look back more than 7 days
+- **No daily goal tracking** — no threshold line, no streak, no success rate
+- **No notifications** — it won't warn you when you are halfway through your daily budget
+- **No data export** — you cannot get your usage data out in any form
+- **No per-app history** — you can't see how a single app's usage has changed over time
+- **No menu bar access** — you have to dig into System Settings every time
+
+Screenlog reads the same underlying database that macOS populates, adds its own lightweight storage layer, and surfaces everything in a persistent menu bar dashboard.
 
 ## Features
 
 - **Menu bar app** — no Dock icon; click the tray icon to show or hide the window
 - **Automatic collection** — gathers data on startup, every hour, and on every wake from sleep
-- **Three views** — Overview (top apps), Daily (usage per day), Hourly (average by hour of day)
-- **Period navigation** — Day / Week / Month / Year with ‹ › arrows
-- **Daily goal** — set a target in hours; days that meet it get a ✓ tick mark on the chart, a threshold line appears, and KPI cards show your success rate and streak
+- **Daily goal** — set a target in hours; a threshold line appears on the chart and KPI cards track your success rate and streak
 - **Screen time warnings** — optional notifications at 50% and 100% of your daily goal
-- **App drill-down** — click any bar in the Overview chart to see that app's daily history
-- **App renaming** — double-click any bar in the Overview chart to give an app a friendly name
+- **App drill-down** — click any bar in the Overview to see that app's full daily history
+- **App renaming** — give any app a friendlier display name
 - **Export** — back up the database or export the current view as CSV
-- **Dark mode** — follows the system appearance, or force Light / Dark in Settings
+- **Dark mode** — follows system appearance, or force Light / Dark in Settings
 - **Launch at login** — optional, configured in Settings
 - **Secure** — reads Apple's database read-only, all data stays local
 
@@ -28,7 +40,7 @@ Built with [Tauri v2](https://tauri.app) (Rust backend + system WKWebView). The 
 
 ### Download (recommended)
 
-Download the latest `Screenlog-*.zip` from [Releases](../../releases), unzip it, and move **Screenlog.app** to your Applications folder.
+Download the latest `Screenlog-*.dmg` from [Releases](../../releases), open it, and drag **Screenlog.app** to your Applications folder.
 
 > **First launch:** macOS will show _"Screenlog cannot be verified"_ because the app is not notarised.
 > To open it: **right-click → Open**, then click **Open** in the dialog.
@@ -40,8 +52,8 @@ Download the latest `Screenlog-*.zip` from [Releases](../../releases), unzip it,
 ### Build from source
 
 ```bash
-git clone https://github.com/r-erd/screentime-explorer.git
-cd screentime-explorer
+git clone https://github.com/r-erd/screenlog.git
+cd screenlog
 npm install          # installs @tauri-apps/cli
 npm run build        # compiles the Rust backend + bundles the app
 ```
@@ -66,18 +78,6 @@ Apple's Screen Time database (`~/Library/Application Support/Knowledge/knowledge
 4. Click **Check Again** in the app
 
 ## Usage
-
-### Views
-
-| Tab | What it shows |
-|-----|--------------|
-| **Overview** | Top apps ranked by total usage for the period. Click a bar to see that app's daily history. Double-click to rename. |
-| **Daily** | Total screen time per day. ✓ marks indicate days the daily goal was met. |
-| **Hourly** | Average usage by hour of day across the period. |
-
-### Period selector
-
-Use **Day / Week / Month / Year** to set the granularity, and **‹ ›** to navigate. Click the period label to jump back to the current period.
 
 ### Daily goal & notifications
 
@@ -114,13 +114,6 @@ macOS continuously writes Screen Time data to `~/Library/Application Support/Kno
 
 Collection runs on startup, every hour, and on every wake from sleep.
 
-## Icon generation
-
-```bash
-npm run icon   # regenerates all icon sizes from assets/screentime_app.png
-./generate-icons.sh --menubar assets/screentime_menu.png  # regenerates menu bar template PNGs
-```
-
 ## Security
 
 - `knowledgeC.db` is opened **read-only** — the app never writes to Apple's database
@@ -131,4 +124,4 @@ npm run icon   # regenerates all icon sizes from assets/screentime_app.png
 
 ## Privacy
 
-All data stays on your Mac. Nothing is sent anywhere. `screentime.db` is listed in `.gitignore`.
+All data stays on your Mac. Nothing is sent anywhere.
