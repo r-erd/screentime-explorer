@@ -4,6 +4,7 @@ mod db;
 mod collect;
 mod scheduler;
 mod commands;
+mod biome;
 
 use std::sync::{Arc, Mutex};
 use tauri::{
