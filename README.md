@@ -5,6 +5,19 @@ No cloud, no Python, no server — everything stays on your Mac.
 
 Built with [Tauri v2](https://tauri.app) (Rust backend + system WKWebView). The entire app bundle is **~6 MB**.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="res/day-overview.png" alt="Day overview — top apps with per-device colours and goal KPIs" width="460"></td>
+    <td><img src="res/month-daily.png" alt="Month daily chart — usage per day with goal line and merge overlaps enabled" width="460"></td>
+  </tr>
+  <tr>
+    <td><img src="res/week-hourly.png" alt="Week hourly chart — average usage by hour of day stacked by device" width="460"></td>
+    <td><img src="res/settings.png" alt="Settings modal — appearance, daily goal, notifications, and data management" width="460"></td>
+  </tr>
+</table>
+
 ## Why Screenlog instead of the built-in Screen Time app?
 
 macOS has a Screen Time panel in System Settings, but it is designed for parental controls and gives you almost no analytical power as a regular user:
