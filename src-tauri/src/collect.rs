@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use crate::db::{APPLE_EPOCH_OFFSET, log_collection};
+use crate::biome;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct CollectResult {
@@ -71,7 +72,6 @@ struct Row {
 
 pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectResult)) -> CollectResult {
     let ran_at = unix_now();
-    let mut inserted = 0i64;
     let mut error: Option<String> = None;
 
     // Find last collected timestamp
@@ -117,12 +117,23 @@ pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectRes
 
     let fetched = rows.len() as i64;
 
-    // Insert rows into our DB
-    if !rows.is_empty() {
+    // ── Biome collection (iPhone/iPad via iCloud sync) ────────────────────────
+    let (biome_rows, biome_error) = biome::collect_biome();
+    let biome_fetched = biome_rows.len() as i64;
+
+    // Combine errors
+    if let Some(be) = biome_error {
+        error = Some(match error {
+            Some(e) => format!("{}; Biome: {}", e, be),
+            None    => format!("Biome: {}", be),
+        });
+    }
+
+    // Insert knowledgeC rows
+    let mut inserted = 0i64;
+    {
         let conn = dst_conn.lock().unwrap();
-        let tx = conn.unchecked_transaction();
-        if let Ok(tx) = tx {
-            let mut count = 0i64;
+        if let Ok(tx) = conn.unchecked_transaction() {
             for r in &rows {
                 let result = conn.execute(
                     "INSERT OR IGNORE INTO screentime \
@@ -130,17 +141,41 @@ pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectRes
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![r.app, r.usage_seconds, r.start_time, r.end_time, r.tz_offset, r.device_id, r.device_model],
                 );
-                if let Ok(n) = result { count += n as i64; }
+                if let Ok(n) = result { inserted += n as i64; }
             }
             let _ = tx.commit();
-            inserted = count;
-        }
+        };
     }
+
+    // Insert Biome rows (device_model = 'iPhone' so device_type_expr classifies them correctly)
+    let mut biome_inserted = 0i64;
+    if !biome_rows.is_empty() {
+        let conn = dst_conn.lock().unwrap();
+        if let Ok(tx) = conn.unchecked_transaction() {
+            for r in &biome_rows {
+                let result = conn.execute(
+                    "INSERT OR IGNORE INTO screentime \
+                     (app, usage_seconds, start_time, end_time, tz_offset, device_id, device_model) \
+                     VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+                    params![r.app, r.usage_seconds, r.start_time, r.end_time, r.device_id, r.device_model],
+                );
+                if let Ok(n) = result { biome_inserted += n as i64; }
+            }
+            let _ = tx.commit();
+        };
+    }
+
+    inserted += biome_inserted;
 
     // Log the run
     {
         let conn = dst_conn.lock().unwrap();
-        let _ = log_collection(&conn, ran_at, fetched, inserted, error.as_deref());
+        let _ = log_collection(
+            &conn, ran_at,
+            fetched, inserted - biome_inserted,
+            biome_fetched, biome_inserted,
+            error.as_deref(),
+        );
     }
 
     let result = CollectResult { ok: error.is_none(), fetched, inserted, error };

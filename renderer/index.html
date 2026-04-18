@@ -126,14 +126,49 @@
     }
     /* All interactive elements inside the drag region must opt out */
     header button, header input, header .mode-group, header .period-nav,
-    header .collect-wrap {
+    header .collect-wrap, header .merge-wrap {
       -webkit-app-region: no-drag;
     }
     header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
 
-    .mode-group, .period-nav, .collect-wrap, .device-filters {
+    .mode-group, .period-nav, .collect-wrap, .device-filters, .merge-wrap {
       -webkit-app-region: no-drag;
     }
+
+    /* ── Merge-overlaps toggle in header ── */
+    .merge-wrap {
+      display: flex; align-items: center; gap: 7px;
+      margin-left: auto; /* push to the right, before collect-wrap */
+    }
+    .merge-label {
+      font-size: 12px; font-weight: 500; color: var(--text3);
+      white-space: nowrap; cursor: pointer;
+    }
+    /* CSS tooltip on the info icon */
+    .merge-info-wrap {
+      position: relative; display: flex; align-items: center;
+    }
+    .merge-info-icon {
+      font-size: 12px; color: var(--text5); cursor: help;
+      line-height: 1; user-select: none; -webkit-user-select: none;
+    }
+    .merge-info-icon:hover { color: var(--text3); }
+    .merge-tooltip {
+      display: none;
+      position: absolute;
+      top: calc(100% + 8px);   /* below the icon — stays inside the window */
+      right: 0;
+      width: 230px;
+      background: var(--text);
+      color: var(--surface);
+      font-size: 12px; font-weight: 400; line-height: 1.5;
+      padding: 8px 11px; border-radius: 9px;
+      pointer-events: none; z-index: 9999;
+      white-space: normal;
+    }
+    .merge-info-wrap:hover .merge-tooltip { display: block; }
+    /* Scale-down the toggle for the header */
+    .merge-wrap .toggle { transform: scale(0.82); transform-origin: right center; }
 
     .mode-group {
       display: flex;
@@ -209,6 +244,33 @@
     .dot-iphone { background: #007AFF; }
     .dot-ipad   { background: #34C759; }
 
+    /* ── Device filter pills ── */
+    #device-filters {
+      padding: 7px 20px 6px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .device-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px 3px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border-ctrl);
+      background: var(--ctrl-bg);
+      cursor: pointer; font-size: 12px; font-weight: 500;
+      color: var(--text2); font-family: inherit;
+      transition: opacity 0.15s, border-color 0.15s;
+      -webkit-app-region: no-drag;
+    }
+    .device-pill:hover { border-color: var(--text3); color: var(--text); }
+    .device-pill-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .device-pill-off {
+      opacity: 0.38;
+    }
+    .device-pill-off:hover { opacity: 0.6; }
+
     /* ── Tabs ── */
     nav.tabs {
       background: var(--surface); border-bottom: 1px solid var(--border);
@@ -244,6 +306,21 @@
     .stat-card .value { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
     .value-green { color: #34C759; }
     .value-red   { color: #FF3B30; }
+
+    /* Row that holds the big number + per-device breakdown side-by-side */
+    .stat-total-row {
+      display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 10px;
+    }
+    /* Per-device breakdown — vertical list on the right of the total */
+    .stat-device-breakdown {
+      display: flex; flex-direction: column; align-items: flex-end;
+      gap: 3px; padding-top: 5px; /* nudge down to align with number baseline */
+      min-width: 0;
+    }
+    .stat-device-item {
+      font-size: 12px; font-weight: 600; white-space: nowrap; text-align: right;
+    }
 
     /* KPI grid (4-up) */
     .kpi-grid {
@@ -411,11 +488,25 @@
       background: var(--text); color: var(--surface); cursor: pointer;
     }
 
+    /* ── Responsive header: stage 1 — hide h1 + merge label, tighten gaps ── */
+    @media (max-width: 860px) {
+      header { gap: 10px; padding-right: 16px; }
+      header h1 { display: none; }
+      .merge-label { display: none; }
+      #period-label { min-width: 120px; font-size: 13px; }
+    }
+
+    /* ── Responsive header: stage 2 — compress mode buttons ── */
+    @media (max-width: 800px) {
+      header { gap: 8px; }
+      .mode-btn { padding: 5px 9px; }
+      .nav-arrow { width: 24px; height: 24px; font-size: 15px; }
+    }
+
     @media (max-width: 680px) {
       .stats { grid-template-columns: 1fr 1fr; }
       .stat-card:last-child { grid-column: span 2; }
       .kpi-grid { grid-template-columns: 1fr 1fr; }
-      #period-label { min-width: 120px; font-size: 13px; }
     }
   </style>
 </head>
@@ -458,6 +549,18 @@
     <button class="nav-arrow" id="nav-next" disabled title="Next period">›</button>
   </div>
 
+  <div class="merge-wrap">
+    <label class="merge-label" for="dedup-toggle">Merge overlaps</label>
+    <div class="merge-info-wrap">
+      <span class="merge-info-icon">ⓘ</span>
+      <div class="merge-tooltip">When two devices are active at the same time, count those minutes only once.<br><br>Affects all charts and stat cards. The daily chart switches to a single deduplicated bar per day.</div>
+    </div>
+    <label class="toggle" style="margin:0">
+      <input type="checkbox" id="dedup-toggle">
+      <span class="toggle-track"></span>
+    </label>
+  </div>
+
   <div class="collect-wrap">
     <button id="collect-btn">
       <span id="collect-icon">↻</span> Collect now
@@ -474,10 +577,18 @@
   <span id="last-run">Last run: —</span>
 </nav>
 
+<div id="device-filters" style="display:none"></div>
+
 <main>
   <div id="tab-overview" class="tab-content active">
     <div class="stats">
-      <div class="stat-card"><div class="label">Total Screen Time</div><div class="value" id="ov-total">—</div></div>
+      <div class="stat-card">
+        <div class="label">Total Screen Time</div>
+        <div class="stat-total-row">
+          <div class="value" id="ov-total">—</div>
+          <div class="stat-device-breakdown" id="ov-total-devices" style="display:none"></div>
+        </div>
+      </div>
       <div class="stat-card"><div class="label">Apps Used</div><div class="value" id="ov-apps">—</div></div>
       <div class="stat-card"><div class="label">Daily Average</div><div class="value" id="ov-avg">—</div></div>
     </div>
@@ -514,7 +625,13 @@
 
   <div id="tab-daily" class="tab-content">
     <div class="stats">
-      <div class="stat-card"><div class="label">Total Screen Time</div><div class="value" id="dy-total">—</div></div>
+      <div class="stat-card">
+        <div class="label">Total Screen Time</div>
+        <div class="stat-total-row">
+          <div class="value" id="dy-total">—</div>
+          <div class="stat-device-breakdown" id="dy-total-devices" style="display:none"></div>
+        </div>
+      </div>
       <div class="stat-card"><div class="label">Daily Average</div><div class="value" id="dy-avg">—</div></div>
       <div class="stat-card"><div class="label">Most Active Day</div><div class="value" id="dy-peak">—</div></div>
     </div>
@@ -673,23 +790,93 @@
       </div>
     </div>
 
-    <!-- iPhone & iPad -->
+    <!-- Devices -->
     <div class="settings-section">
-      <div class="settings-section-title">iPhone &amp; iPad Data</div>
-      <div class="settings-info-box">
-        <strong>Only Mac usage is available on macOS 13+.</strong><br>
-        Apple moved synced device Screen Time data into a private, sandboxed database
-        (<code>RMAdminStore-Cloud.sqlite</code>) that is protected beyond Full Disk Access —
-        only Apple's own ScreenTimeAgent process can read it. This is an Apple limitation
-        that cannot be worked around.
-        <br><br>
-        Colors in charts still distinguish between devices if data is present:
-        <span style="display:inline-flex; align-items:center; gap:4px; margin-top:4px;">
-          <span class="dot dot-mac"></span> Mac &nbsp;
-          <span class="dot dot-iphone"></span> iPhone &nbsp;
-          <span class="dot dot-ipad"></span> iPad
-        </span>
+      <div class="settings-section-title">Devices</div>
+      <div id="devices-list">
+        <!-- populated by renderDeviceSettingsList() when modal opens -->
       </div>
+    </div>
+
+    <!-- Grafana Push -->
+    <div class="settings-section">
+      <div class="settings-section-title">Grafana Push</div>
+      <div class="settings-info-box" style="margin-bottom:14px">
+        Push daily screen time totals to a PostgreSQL database so Grafana can
+        visualise them. The table <code>screenlog_daily</code> is created
+        automatically on first push. See the README for setup steps.
+      </div>
+
+      <div class="settings-row" style="margin-bottom:10px">
+        <div class="settings-row-main">
+          <div class="settings-label">Host</div>
+        </div>
+        <div class="settings-row-control">
+          <input id="pg-host" type="text" class="target-input"
+                 style="width:160px;text-align:left" placeholder="homeserver.local">
+        </div>
+      </div>
+
+      <div class="settings-row" style="margin-bottom:10px">
+        <div class="settings-row-main">
+          <div class="settings-label">Port</div>
+        </div>
+        <div class="settings-row-control">
+          <input id="pg-port" type="number" class="target-input"
+                 style="width:72px" placeholder="5432" min="1" max="65535">
+        </div>
+      </div>
+
+      <div class="settings-row" style="margin-bottom:10px">
+        <div class="settings-row-main">
+          <div class="settings-label">Database</div>
+        </div>
+        <div class="settings-row-control">
+          <input id="pg-database" type="text" class="target-input"
+                 style="width:160px;text-align:left" placeholder="screenlog">
+        </div>
+      </div>
+
+      <div class="settings-row" style="margin-bottom:10px">
+        <div class="settings-row-main">
+          <div class="settings-label">User</div>
+        </div>
+        <div class="settings-row-control">
+          <input id="pg-user" type="text" class="target-input"
+                 style="width:160px;text-align:left" placeholder="screenlog">
+        </div>
+      </div>
+
+      <div class="settings-row" style="margin-bottom:14px">
+        <div class="settings-row-main">
+          <div class="settings-label">Password</div>
+        </div>
+        <div class="settings-row-control">
+          <input id="pg-password" type="password" class="target-input"
+                 style="width:160px;text-align:left" placeholder="••••••••">
+        </div>
+      </div>
+
+      <div class="settings-row" style="margin-bottom:12px">
+        <div class="settings-row-main">
+          <div class="settings-label">Auto-push after collection</div>
+          <div class="settings-sub">Push new data every time Screenlog collects</div>
+        </div>
+        <div class="settings-row-control">
+          <label class="toggle">
+            <input type="checkbox" id="pg-autopush">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="pg-test-btn" class="fda-btn fda-btn-secondary"
+                style="margin:0;flex:1;height:36px;font-size:13px">Test connection</button>
+        <button id="pg-push-btn" class="fda-btn fda-btn-secondary"
+                style="margin:0;flex:1;height:36px;font-size:13px">Push all data</button>
+      </div>
+      <div id="pg-status" style="margin-top:10px;font-size:12px;color:var(--text3);min-height:16px"></div>
     </div>
 
     <!-- Collection History -->

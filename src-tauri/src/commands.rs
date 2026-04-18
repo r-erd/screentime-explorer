@@ -222,6 +222,39 @@ pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
     if enabled { mgr.enable().map_err(map_err) } else { mgr.disable().map_err(map_err) }
 }
 
+// ── Grafana / PostgreSQL push ─────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn test_grafana_push(
+    host: String, port: u16, database: String, user: String, password: String,
+) -> Result<crate::push::TestResult, String> {
+    let cfg = crate::push::PushConfig { host, port, database, user, password };
+    Ok(crate::push::test_connection(&cfg).await)
+}
+
+#[tauri::command]
+pub async fn push_to_grafana(
+    host: String, port: u16, database: String, user: String, password: String,
+    state: State<'_, DbState>,
+) -> Result<crate::push::PushResult, String> {
+    let cfg = crate::push::PushConfig { host, port, database, user, password };
+    Ok(crate::push::push_all(&cfg, state.0.clone()).await)
+}
+
+// ── Device renaming ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn update_device_name(device_id: String, name: String, state: State<'_, DbState>) -> Result<(), String> {
+    if device_id.len() > 512 {
+        return Err("Invalid deviceId".into());
+    }
+    if name.len() > 256 {
+        return Err("Name too long".into());
+    }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::update_device_name(&conn, &device_id, &name).map_err(map_err)
+}
+
 // ── Window drag ───────────────────────────────────────────────────────────────
 
 #[tauri::command]

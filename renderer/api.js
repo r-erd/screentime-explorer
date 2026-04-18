@@ -36,6 +36,7 @@
     exportDb:            () => inv('export_db',            {}),
     importDb:            () => inv('import_db',            {}),
     updateAppName:       (bundleId, name) => inv('update_app_name', { bundleId, name }),
+    updateDeviceName:    (deviceId, name) => inv('update_device_name', { deviceId, name }),
 
     // ── Push events from backend → renderer ───────────────────────────────────
     onCollectProgress: (callback) => {
@@ -48,11 +49,17 @@
     },
 
     // ── Extended API ──────────────────────────────────────────────────────────
-    getAppDaily:      (appId, from, to) => inv('get_app_daily', { app_id: appId, from, to }),
+    getAppDaily:      (appId, from, to) => inv('get_app_daily', { appId, from, to }),
     showNotification: (title, body)     => inv('show_notification', { title, body }),
     getAutostart:     ()                => inv('get_autostart', {}),
     setAutostart:     (enabled)         => inv('set_autostart', { enabled }),
     saveCsv:          (filename, content) => inv('save_csv', { filename, content }),
     startDrag:        ()                  => inv('start_drag', {}),
+
+    // ── Grafana / PostgreSQL push ──────────────────────────────────────────────
+    testGrafanaPush: (host, port, database, user, password) =>
+      inv('test_grafana_push', { host, port, database, user, password }),
+    pushToGrafana:   (host, port, database, user, password) =>
+      inv('push_to_grafana',   { host, port, database, user, password }),
   };
 })();

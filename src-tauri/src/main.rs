@@ -4,6 +4,8 @@ mod db;
 mod collect;
 mod scheduler;
 mod commands;
+mod biome;
+mod push;
 
 use std::sync::{Arc, Mutex};
 use tauri::{
@@ -96,6 +98,9 @@ fn main() {
             commands::set_autostart,
             commands::save_csv,
             commands::start_drag,
+            commands::update_device_name,
+            commands::test_grafana_push,
+            commands::push_to_grafana,
         ])
         .on_window_event(|window, event| {
             // Hide instead of close — app lives in the menu bar
@@ -149,6 +154,18 @@ fn toggle_window(app: &AppHandle) {
 
 fn show_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
+        // Clamp to minimum dimensions — the window-state plugin can restore a
+        // size that was saved before the minimum was raised, bypassing the
+        // minWidth / minHeight values in tauri.conf.json.
+        const MIN_W: f64 = 780.0;
+        const MIN_H: f64 = 500.0;
+        if let (Ok(size), Ok(scale)) = (win.outer_size(), win.scale_factor()) {
+            let lw = size.width  as f64 / scale;
+            let lh = size.height as f64 / scale;
+            if lw < MIN_W || lh < MIN_H {
+                let _ = win.set_size(tauri::LogicalSize::new(lw.max(MIN_W), lh.max(MIN_H)));
+            }
+        }
         let _ = win.show();
         let _ = win.set_focus();
     }
