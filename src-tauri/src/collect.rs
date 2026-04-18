@@ -156,8 +156,8 @@ pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectRes
                 let result = conn.execute(
                     "INSERT OR IGNORE INTO screentime \
                      (app, usage_seconds, start_time, end_time, tz_offset, device_id, device_model) \
-                     VALUES (?1, ?2, ?3, ?4, 0, ?5, 'iPhone')",
-                    params![r.app, r.usage_seconds, r.start_time, r.end_time, r.device_id],
+                     VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+                    params![r.app, r.usage_seconds, r.start_time, r.end_time, r.device_id, r.device_model],
                 );
                 if let Ok(n) = result { biome_inserted += n as i64; }
             }
@@ -170,7 +170,12 @@ pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectRes
     // Log the run
     {
         let conn = dst_conn.lock().unwrap();
-        let _ = log_collection(&conn, ran_at, fetched + biome_fetched, inserted, error.as_deref());
+        let _ = log_collection(
+            &conn, ran_at,
+            fetched, inserted - biome_inserted,
+            biome_fetched, biome_inserted,
+            error.as_deref(),
+        );
     }
 
     let result = CollectResult { ok: error.is_none(), fetched, inserted, error };

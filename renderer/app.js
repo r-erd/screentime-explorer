@@ -2,26 +2,22 @@
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const DEVICE_LABELS = {
-  mac:    'Mac',
-  iphone: 'iPhone',
-  ipad:   'iPad',
-};
-
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const state = {
-  mode:      'week',  // day | week | month | year
-  offset:    0,       // 0 = current period, -1 = previous, etc.
-  activeTab: 'overview',
-  hasData:   { mac: false, iphone: false, ipad: false },
+  mode:          'week',  // day | week | month | year
+  offset:        0,       // 0 = current period, -1 = previous, etc.
+  activeTab:     'overview',
+  devices:       [],      // [{device_id, device_type, display_name}], set by refreshDevices()
+  hiddenDevices: new Set(), // device_ids currently hidden by the user
 };
 
 const settings = {
-  dailyTargetHours:    null,
-  showTargetTicks:     true,
-  appearance:          'system',  // 'system' | 'light' | 'dark'
-  notificationsEnabled: false,
+  dailyTargetHours:       null,
+  showTargetTicks:        true,
+  appearance:             'system',  // 'system' | 'light' | 'dark'
+  notificationsEnabled:   false,
+  deduplicateDeviceTime:  false,
 };
 
 const charts = {};
@@ -58,13 +54,20 @@ function applyTheme(reloadCharts = false) {
 
 // ── Device colors (theme-aware) ───────────────────────────────────────────────
 
-function getDeviceColors() {
+// Returns a color for the Nth device of a given type (0-indexed within that type).
+function getDeviceColor(deviceType, typeIndex) {
   const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-  return {
-    mac:    dark ? '#e5e5e5' : '#1d1d1f',
-    iphone: '#007AFF',
-    ipad:   '#34C759',
+  if (deviceType === 'mac') return dark ? '#e5e5e5' : '#1d1d1f';
+  const palettes = {
+    iphone: ['#007AFF', '#5AC8FA', '#32ADE6', '#0A84FF'],
+    ipad:   ['#34C759', '#30D158', '#32D74B', '#4CD964'],
   };
+  const p = palettes[deviceType] ?? palettes.iphone;
+  return p[typeIndex % p.length];
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ── Chart grid helper ─────────────────────────────────────────────────────────
@@ -105,6 +108,14 @@ function fmtRelTime(unixTs) {
 function fmtDate(isoDate) {
   const [y, m, d] = isoDate.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Like fmtDate but includes the year when the date is not in the current year.
+function fmtDateWithYear(isoDate) {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const opts = { month: 'short', day: 'numeric' };
+  if (y !== new Date().getFullYear()) opts.year = 'numeric';
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', opts);
 }
 
 function fmtHour(h) {
@@ -206,12 +217,101 @@ function destroyChart(id) {
   if (charts[id]) { charts[id].destroy(); delete charts[id]; }
 }
 
-function activeDeviceKeys() {
-  return ['mac', 'iphone', 'ipad'].filter(d => state.hasData[d]);
+// Returns devices that are currently visible (not hidden by the filter pills).
+function visibleDevices() {
+  return state.devices.filter(d => !state.hiddenDevices.has(d.device_id));
+}
+
+// Build typed datasets array from state.devices for Chart.js, skipping hidden devices.
+function deviceDatasets(dataFn) {
+  return state.devices.map((dev, i) => {
+    const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+    return {
+      label:           dev.display_name,
+      data:            dataFn(dev),
+      backgroundColor: getDeviceColor(dev.device_type, typeIdx),
+      hidden:          state.hiddenDevices.has(dev.device_id),
+    };
+  });
 }
 
 function rowTotal(row) {
-  return activeDeviceKeys().reduce((s, d) => s + (row[d] || 0), 0);
+  return Object.entries(row.by_device || {})
+    .filter(([id]) => !state.hiddenDevices.has(id))
+    .reduce((s, [, v]) => s + v, 0);
+}
+
+// Render per-device totals (as colored items) into a .stat-device-breakdown element.
+// byDeviceTotals: { device_id -> seconds }
+// Only shown when dedup is off and there are 2+ devices with data.
+function renderDeviceBreakdown(elId, byDeviceTotals) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const dedup = settings.deduplicateDeviceTime;
+  const devicesWithData = state.devices.filter(d => (byDeviceTotals[d.device_id] || 0) > 0);
+
+  if (dedup || devicesWithData.length < 2) {
+    el.innerHTML = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  const parts = [];
+  state.devices.forEach((dev, i) => {
+    const secs = byDeviceTotals[dev.device_id] || 0;
+    if (secs === 0) return;
+    const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+    const color   = getDeviceColor(dev.device_type, typeIdx);
+    parts.push(
+      `<span class="stat-device-item" style="color:${color}">${escHtml(dev.display_name)}: ${fmtHours(secs)}</span>`
+    );
+  });
+
+  el.innerHTML = parts.join('');
+  el.style.display = '';
+}
+
+// ── Device filter pills ───────────────────────────────────────────────────────
+
+function renderDevicePills() {
+  const bar = document.getElementById('device-filters');
+  if (!bar) return;
+
+  // Hide when there is only one device, or when dedup is on (per-device view not meaningful then)
+  if (state.devices.length < 2 || settings.deduplicateDeviceTime) {
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = '';
+  bar.innerHTML = '';
+
+  state.devices.forEach((dev, i) => {
+    const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+    const color   = getDeviceColor(dev.device_type, typeIdx);
+    const hidden  = state.hiddenDevices.has(dev.device_id);
+
+    const pill = document.createElement('button');
+    pill.className = 'device-pill' + (hidden ? ' device-pill-off' : '');
+    pill.title     = hidden ? `Show ${dev.display_name}` : `Hide ${dev.display_name}`;
+    pill.innerHTML =
+      `<span class="device-pill-dot" style="background:${color}"></span>` +
+      `<span class="device-pill-label">${escHtml(dev.display_name)}</span>`;
+
+    pill.addEventListener('click', () => {
+      if (state.hiddenDevices.has(dev.device_id)) {
+        state.hiddenDevices.delete(dev.device_id);
+      } else {
+        // Don't allow hiding all devices
+        const wouldRemain = state.devices.filter(d => !state.hiddenDevices.has(d.device_id) && d.device_id !== dev.device_id);
+        if (wouldRemain.length === 0) return;
+        state.hiddenDevices.add(dev.device_id);
+      }
+      renderDevicePills();
+      loadCurrentTab();
+    });
+
+    bar.appendChild(pill);
+  });
 }
 
 // ── UI updates ────────────────────────────────────────────────────────────────
@@ -273,7 +373,7 @@ async function loadOverview() {
   const [from, to] = getApiRange();
 
   // Fetch app breakdown + daily totals in parallel (daily needed for KPIs)
-  const [{ apps }, { days }] = await Promise.all([
+  const [{ apps, dedup_total: periodDedupSec }, { days }] = await Promise.all([
     window.api.getScreentime(from, to),
     window.api.getDaily(from, to),
   ]);
@@ -286,28 +386,49 @@ async function loadOverview() {
     document.getElementById('ov-apps').textContent   = '—';
     document.getElementById('ov-avg').textContent    = '—';
     document.getElementById('ov-kpi').style.display  = 'none';
+    const ovBd = document.getElementById('ov-total-devices');
+    if (ovBd) { ovBd.innerHTML = ''; ovBd.style.display = 'none'; }
     return;
   }
 
-  // KPIs (uses daily totals, not per-app data)
-  try { renderKpis(days, days.map(d => rowTotal(d)), 'ov'); } catch (e) { console.error('KPI render error:', e); }
+  // KPIs (uses daily totals; when dedup is on, use per-day dedup_total)
+  const kpiTotals = settings.deduplicateDeviceTime
+    ? days.map(d => d.dedup_total)
+    : days.map(d => rowTotal(d));
+  try { renderKpis(days, kpiTotals, 'ov'); } catch (e) { console.error('KPI render error:', e); }
 
-  const total = filtered.reduce((s, a) => s + rowTotal(a), 0);
   const numDays = Math.max(1, Math.round((to - from) / 86400));
+  const total   = settings.deduplicateDeviceTime
+    ? periodDedupSec
+    : filtered.reduce((s, a) => s + rowTotal(a), 0);
   document.getElementById('ov-total').textContent = fmtHours(total);
   document.getElementById('ov-apps').textContent  = String(filtered.length);
   document.getElementById('ov-avg').textContent   = fmtHours(total / numDays);
 
+  // Per-device breakdown under "Total Screen Time"
+  const ovDevTotals = {};
+  for (const app of filtered) {
+    for (const [devId, secs] of Object.entries(app.by_device || {})) {
+      ovDevTotals[devId] = (ovDevTotals[devId] || 0) + secs;
+    }
+  }
+  renderDeviceBreakdown('ov-total-devices', ovDevTotals);
+
   showTabState('ov', 'data');
   destroyChart('ov');
 
-  const devKeys  = activeDeviceKeys();
-  const colors   = getDeviceColors();
-  const datasets = devKeys.map(dev => ({
-    label:           DEVICE_LABELS[dev],
-    data:            filtered.map(a => Math.round((a[dev] || 0) / 60)),
-    backgroundColor: colors[dev],
-  }));
+  const dedup = settings.deduplicateDeviceTime;
+  const dark  = document.documentElement.getAttribute('data-theme') === 'dark';
+
+  const ovDatasets = dedup
+    ? [{
+        label: 'Screen time',
+        data:  filtered.map(a => Math.round(
+          Object.values(a.by_device).reduce((s, v) => s + v, 0) / 60
+        )),
+        backgroundColor: dark ? '#e5e5e5' : '#1d1d1f',
+      }]
+    : deviceDatasets(dev => filtered.map(a => Math.round((a.by_device[dev.device_id] || 0) / 60)));
 
   const canvas = document.getElementById('ov-chart');
   canvas.style.height = `${Math.max(280, filtered.length * 28)}px`;
@@ -317,7 +438,7 @@ async function loadOverview() {
     type: 'bar',
     data: {
       labels: filtered.map(a => a.display_name),
-      datasets
+      datasets: ovDatasets,
     },
     options: {
       indexAxis: 'y',
@@ -325,7 +446,7 @@ async function loadOverview() {
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: devKeys.length > 1,
+          display: !dedup && state.devices.length > 1,
           position: 'top',
           labels: { boxWidth: 10, font: { size: 11 } },
         },
@@ -340,8 +461,8 @@ async function loadOverview() {
         },
       },
       scales: {
-        x: { stacked: true, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
-        y: { stacked: true, ticks: { font: { size: 12 } } },
+        x: { stacked: !dedup, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        y: { stacked: !dedup, ticks: { font: { size: 12 } } },
       },
     },
   });
@@ -374,7 +495,10 @@ async function loadDaily() {
   const [from, to] = getApiRange();
   const { days } = await window.api.getDaily(from, to);
 
-  const totals = days.map(d => rowTotal(d));
+  const dedup = settings.deduplicateDeviceTime;
+  const totals = dedup
+    ? days.map(d => d.dedup_total)
+    : days.map(d => rowTotal(d));
   const grandTotal = totals.reduce((s, v) => s + v, 0);
 
   if (grandTotal === 0) {
@@ -383,6 +507,8 @@ async function loadDaily() {
     document.getElementById('dy-avg').textContent   = '—';
     document.getElementById('dy-peak').textContent  = '—';
     document.getElementById('dy-kpi').style.display  = 'none';
+    const dyBd = document.getElementById('dy-total-devices');
+    if (dyBd) { dyBd.innerHTML = ''; dyBd.style.display = 'none'; }
     return;
   }
 
@@ -392,7 +518,16 @@ async function loadDaily() {
 
   document.getElementById('dy-total').textContent = fmtHours(grandTotal);
   document.getElementById('dy-avg').textContent   = fmtHours(avg);
-  document.getElementById('dy-peak').textContent  = fmtDate(days[peakIdx].date);
+  document.getElementById('dy-peak').textContent  = fmtDateWithYear(days[peakIdx].date);
+
+  // Per-device breakdown under "Total Screen Time"
+  const dyDevTotals = {};
+  for (const day of days) {
+    for (const [devId, secs] of Object.entries(day.by_device || {})) {
+      dyDevTotals[devId] = (dyDevTotals[devId] || 0) + secs;
+    }
+  }
+  renderDeviceBreakdown('dy-total-devices', dyDevTotals);
 
   showTabState('dy', 'data');
   destroyChart('dy');
@@ -401,14 +536,16 @@ async function loadDaily() {
 
   const targetSec = settings.dailyTargetHours ? settings.dailyTargetHours * 3600 : null;
   const targetMin = settings.dailyTargetHours ? settings.dailyTargetHours * 60   : null;
-  const devKeys   = activeDeviceKeys();
-  const colors    = getDeviceColors();
 
-  const datasets = devKeys.map(dev => ({
-    label:           DEVICE_LABELS[dev],
-    data:            days.map(d => Math.round((d[dev] || 0) / 60)),
-    backgroundColor: colors[dev],
-  }));
+  // When dedup is on, show a single bar per day using the deduplicated total
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const datasets = dedup
+    ? [{
+        label: 'Deduplicated',
+        data:  days.map(d => Math.round(d.dedup_total / 60)),
+        backgroundColor: dark ? '#e5e5e5' : '#1d1d1f',
+      }]
+    : deviceDatasets(dev => days.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60)));
 
   // Inline plugin: threshold line + green tick marks above bars that meet the goal
   const targetLinePlugin = {
@@ -421,6 +558,7 @@ async function loadDaily() {
         const yPx = y.getPixelForValue(targetMin);
         if (yPx >= chartArea.top && yPx <= chartArea.bottom) {
           ctx.save();
+          // Dashed line
           ctx.strokeStyle = '#FF3B30';
           ctx.lineWidth = 1.5;
           ctx.setLineDash([5, 4]);
@@ -429,10 +567,45 @@ async function loadDaily() {
           ctx.lineTo(chartArea.right, yPx);
           ctx.stroke();
           ctx.setLineDash([]);
-          ctx.fillStyle = '#FF3B30';
+
+          // Pill label
+          const labelText = `Goal: ${fmtHours(targetSec)}`;
           ctx.font = '600 10px -apple-system, BlinkMacSystemFont, sans-serif';
+          const tw   = ctx.measureText(labelText).width;
+          const px   = 6, py = 3;
+          const ph   = 10 + py * 2;          // pill height
+          const pw   = tw + px * 2;           // pill width
+          const pr   = ph / 2;                // border-radius → full pill
+          const pilX = chartArea.right - pw - 4;
+          const pilY = yPx - ph - 3;          // 3px gap above the line
+
+          // Background: semi-transparent white (light) / dark-red (dark)
+          const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+          ctx.fillStyle = dark ? 'rgba(255,59,48,0.22)' : 'rgba(255,255,255,0.88)';
+          ctx.beginPath();
+          ctx.moveTo(pilX + pr, pilY);
+          ctx.lineTo(pilX + pw - pr, pilY);
+          ctx.arcTo(pilX + pw, pilY,      pilX + pw, pilY + ph,      pr);
+          ctx.lineTo(pilX + pw, pilY + ph - pr);
+          ctx.arcTo(pilX + pw, pilY + ph, pilX + pw - pr, pilY + ph, pr);
+          ctx.lineTo(pilX + pr, pilY + ph);
+          ctx.arcTo(pilX,      pilY + ph, pilX, pilY + ph - pr,      pr);
+          ctx.lineTo(pilX,     pilY + pr);
+          ctx.arcTo(pilX,      pilY,      pilX + pr, pilY,            pr);
+          ctx.closePath();
+          ctx.fill();
+
+          // Subtle border
+          ctx.strokeStyle = 'rgba(255,59,48,0.45)';
+          ctx.lineWidth = 0.75;
+          ctx.stroke();
+
+          // Text
+          ctx.fillStyle = '#FF3B30';
           ctx.textAlign = 'right';
-          ctx.fillText(`Goal: ${fmtHours(targetSec)}`, chartArea.right, yPx - 5);
+          ctx.textBaseline = 'middle';
+          ctx.fillText(labelText, chartArea.right - 4 - px, pilY + ph / 2);
+          ctx.textBaseline = 'alphabetic';
           ctx.restore();
         }
       }
@@ -470,17 +643,24 @@ async function loadDaily() {
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: devKeys.length > 1,
+          display: !dedup && state.devices.length > 1,
           position: 'top',
           labels: { boxWidth: 10, font: { size: 11 } },
         },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}` },
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+            footer: dedup ? undefined : items => {
+              if (items.length < 2) return [];
+              const total = items.reduce((s, i) => s + i.raw, 0);
+              return [`Total: ${fmtHours(total * 60)}`];
+            },
+          },
         },
       },
       scales: {
-        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: true, suggestedMax: targetMin ?? undefined, ticks: { stepSize: niceStepMin(Math.max(targetMin ?? 0, Math.max(...totals.map(t => t / 60)))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        x: { stacked: !dedup, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: !dedup, suggestedMax: targetMin ?? undefined, ticks: { stepSize: niceStepMin(Math.max(targetMin ?? 0, Math.max(...totals.map(t => t / 60)))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
     plugins: [targetLinePlugin],
@@ -543,15 +723,20 @@ async function loadHourly() {
   const [from, to] = getApiRange();
   const { hours, num_days } = await window.api.getHourly(from, to);
 
+  const dedup = settings.deduplicateDeviceTime;
+
   // Average per-day so the unit is "avg hours per day"
   const avgd = hours.map(h => ({
     ...h,
-    mac:    h.mac    / num_days,
-    iphone: h.iphone / num_days,
-    ipad:   h.ipad   / num_days,
+    by_device: Object.fromEntries(
+      Object.entries(h.by_device || {}).map(([id, v]) => [id, v / num_days])
+    ),
+    // dedup_secs already averaged per day by the backend
   }));
 
-  const totals     = avgd.map(h => rowTotal(h));
+  const totals = dedup
+    ? hours.map(h => h.dedup_secs)   // already averaged per day
+    : avgd.map(h => rowTotal(h));
   const grandTotal = totals.reduce((s, v) => s + v, 0);
 
   if (grandTotal === 0) {
@@ -573,23 +758,24 @@ async function loadHourly() {
   showTabState('hr', 'data');
   destroyChart('hr');
 
-  const devKeys  = activeDeviceKeys();
-  const colors   = getDeviceColors();
-  const datasets = devKeys.map(dev => ({
-    label:           DEVICE_LABELS[dev],
-    data:            avgd.map(h => Math.round((h[dev] || 0) / 60)),
-    backgroundColor: colors[dev],
-  }));
+  const dark     = document.documentElement.getAttribute('data-theme') === 'dark';
+  const hrDatasets = dedup
+    ? [{
+        label: 'Deduplicated',
+        data:  hours.map(h => Math.round(h.dedup_secs / 60)),
+        backgroundColor: dark ? '#e5e5e5' : '#1d1d1f',
+      }]
+    : deviceDatasets(dev => avgd.map(h => Math.round((h.by_device[dev.device_id] || 0) / 60)));
 
   charts['hr'] = new Chart(document.getElementById('hr-chart'), {
     type: 'bar',
-    data: { labels: hours.map(h => fmtHour(h.hour)), datasets },
+    data: { labels: hours.map(h => fmtHour(h.hour)), datasets: hrDatasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: devKeys.length > 1,
+          display: !dedup && state.devices.length > 1,
           position: 'top',
           labels: { boxWidth: 10, font: { size: 11 } },
         },
@@ -598,8 +784,8 @@ async function loadHourly() {
         },
       },
       scales: {
-        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: true, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        x: { stacked: !dedup, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: !dedup, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
   });
@@ -642,6 +828,94 @@ function showRenamePopover(item, clientX, clientY) {
   };
 }
 
+// ── Device rename popover ─────────────────────────────────────────────────────
+
+function showRenameDevicePopover(deviceId, currentName, clientX, clientY) {
+  const popover = document.getElementById('rename-popover');
+  const input   = document.getElementById('rename-input');
+  const title   = popover.querySelector('.rename-popover-title');
+
+  if (title) title.textContent = 'Rename device';
+  input.value = currentName;
+
+  const W = window.innerWidth, H = window.innerHeight;
+  const PW = 260, PH = 110;
+  popover.style.left = `${Math.min(clientX, W - PW - 12)}px`;
+  popover.style.top  = `${Math.min(clientY, H - PH - 12)}px`;
+  popover.style.display = 'block';
+
+  input.focus();
+  input.select();
+
+  async function commit() {
+    const name = input.value.trim();
+    popover.style.display = 'none';
+    if (title) title.textContent = 'Rename app';
+    if (name === currentName) return;
+    await window.api.updateDeviceName(deviceId, name);
+    await refreshDevices();
+    renderDeviceSettingsList();
+    loadCurrentTab();
+  }
+
+  function cancel() {
+    popover.style.display = 'none';
+    if (title) title.textContent = 'Rename app';
+  }
+
+  document.getElementById('rename-ok').onclick     = commit;
+  document.getElementById('rename-cancel').onclick = cancel;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter')  commit();
+    if (e.key === 'Escape') cancel();
+  };
+}
+
+// ── Device settings list ──────────────────────────────────────────────────────
+
+async function renderDeviceSettingsList() {
+  const container = document.getElementById('devices-list');
+  if (!container) return;
+  container.innerHTML = '<div class="loading" style="padding:10px 0">Loading…</div>';
+  try {
+    const { devices } = await window.api.getDevices();
+    if (!devices || devices.length === 0) {
+      container.innerHTML = '<div style="color:var(--text4);font-size:13px;padding:4px 0">No devices found. Run a collection first.</div>';
+      return;
+    }
+    const typeCount = {};
+    container.innerHTML = '';
+    for (const dev of devices) {
+      const tc = typeCount[dev.device_type] || 0;
+      typeCount[dev.device_type] = tc + 1;
+      const color    = getDeviceColor(dev.device_type, tc);
+      const subtitle = dev.device_type === 'mac' ? 'Mac' : dev.device_type === 'iphone' ? 'iPhone' : 'iPad';
+      const row = document.createElement('div');
+      row.className = 'settings-row';
+      row.style.marginTop = '10px';
+      row.innerHTML =
+        `<div class="settings-row-main" style="display:flex;align-items:center;gap:8px">` +
+          `<span style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0;display:inline-block"></span>` +
+          `<div>` +
+            `<div class="settings-label">${escHtml(dev.display_name)}</div>` +
+            `<div class="settings-sub">${escHtml(subtitle)}</div>` +
+          `</div>` +
+        `</div>` +
+        `<div class="settings-row-control">` +
+          `<button class="target-clear-btn" style="white-space:nowrap">Rename…</button>` +
+        `</div>`;
+      const btn = row.querySelector('button');
+      const devSnapshot = { ...dev };
+      btn.addEventListener('click', (e) => {
+        showRenameDevicePopover(devSnapshot.device_id, devSnapshot.display_name, e.clientX, e.clientY);
+      });
+      container.appendChild(row);
+    }
+  } catch {
+    container.innerHTML = '<div style="color:var(--text4);font-size:13px;padding:4px 0">Failed to load devices.</div>';
+  }
+}
+
 // ── App drill-down modal ──────────────────────────────────────────────────────
 
 function closeDrilldown() {
@@ -674,25 +948,61 @@ async function showAppDrilldown(app, from, to) {
       return;
     }
 
+    // In year view aggregate individual days into months for readability
+    let chartRows = days;
+    let labelFn   = d => fmtDate(d.date);
+    if (state.mode === 'year') {
+      const byMonth = {};
+      for (const d of days) {
+        const key = d.date.slice(0, 7); // "YYYY-MM"
+        if (!byMonth[key]) byMonth[key] = { date: key, total: 0, by_device: {} };
+        byMonth[key].total += d.total;
+        for (const [id, secs] of Object.entries(d.by_device || {})) {
+          byMonth[key].by_device[id] = (byMonth[key].by_device[id] || 0) + secs;
+        }
+      }
+      chartRows = Object.values(byMonth).sort((a, b) => a.date.localeCompare(b.date));
+      labelFn   = d => {
+        const [y, m] = d.date.split('-').map(Number);
+        return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+      };
+    }
+
     wrapEl.style.display = '';
-    const colors = getDeviceColors();
-    const grid   = getChartGrid();
+    const grid     = getChartGrid();
+    const datasets = deviceDatasets(dev =>
+      chartRows.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60))
+    );
 
     charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
       type: 'bar',
       data: {
-        labels:   days.map(d => fmtDate(d.date)),
-        datasets: [{ label: app.display_name, data: days.map(d => Math.round(d.total / 60)), backgroundColor: colors.mac }],
+        labels:   chartRows.map(labelFn),
+        datasets,
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: ctx => ` ${fmtHours(ctx.raw * 60)}` } },
+          legend: { display: state.devices.length > 1, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+              footer: items => items.length > 1
+                ? [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`]
+                : [],
+            },
+          },
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 11 } } },
-          y: { ticks: { stepSize: niceStepMin(Math.max(...days.map(d => d.total / 60))), callback: v => fmtHours(v * 60) }, grid: { color: grid } },
+          x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: {
+            stacked: true,
+            ticks: {
+              stepSize: niceStepMin(Math.max(...chartRows.map(d => d.total / 60))),
+              callback: v => fmtHours(v * 60),
+            },
+            grid: { color: grid },
+          },
         },
       },
     });
@@ -713,18 +1023,20 @@ async function exportCsv() {
   if (state.activeTab === 'overview') {
     const { apps } = await window.api.getScreentime(from, to);
     const rows = apps.filter(a => rowTotal(a) > 0);
-    csv = 'App ID,Display Name,Total Minutes,Mac Minutes,iPhone Minutes,iPad Minutes\n' +
+    const devCols = state.devices.map(d => `"${d.display_name} (min)"`).join(',');
+    csv = `App ID,Display Name,Total Minutes,${devCols}\n` +
       rows.map(a =>
         `"${a.app}","${a.display_name}",${Math.round(rowTotal(a)/60)},` +
-        `${Math.round((a.mac||0)/60)},${Math.round((a.iphone||0)/60)},${Math.round((a.ipad||0)/60)}`
+        state.devices.map(d => Math.round((a.by_device[d.device_id] || 0) / 60)).join(',')
       ).join('\n');
     filename = `screenlog_overview_${ts}.csv`;
   } else if (state.activeTab === 'daily') {
     const { days } = await window.api.getDaily(from, to);
-    csv = 'Date,Total Minutes,Mac Minutes,iPhone Minutes,iPad Minutes\n' +
+    const devCols = state.devices.map(d => `"${d.display_name} (min)"`).join(',');
+    csv = `Date,Total Minutes,${devCols}\n` +
       days.map(d =>
         `${d.date},${Math.round(rowTotal(d)/60)},` +
-        `${Math.round((d.mac||0)/60)},${Math.round((d.iphone||0)/60)},${Math.round((d.ipad||0)/60)}`
+        state.devices.map(dev => Math.round((d.by_device[dev.device_id] || 0) / 60)).join(',')
       ).join('\n');
     filename = `screenlog_daily_${ts}.csv`;
   } else {
@@ -755,7 +1067,7 @@ async function checkGoalNotifications() {
     const { days } = await window.api.getDaily(todayStart, todayEnd);
     if (!days || !days.length) return;
     const d = days[days.length - 1];
-    const total = (d.mac || 0) + (d.iphone || 0) + (d.ipad || 0);
+    const total = settings.deduplicateDeviceTime ? d.dedup_total : rowTotal(d);
 
     if (!ns.fullFired && total >= targetSec) {
       await window.api.showNotification(
@@ -773,6 +1085,64 @@ async function checkGoalNotifications() {
     }
     localStorage.setItem('notifState', JSON.stringify(ns));
   } catch { /* ignore */ }
+}
+
+// ── Grafana push ──────────────────────────────────────────────────────────────
+
+const PG_KEYS = ['host', 'port', 'database', 'user', 'password'];
+
+function loadPgConfig() {
+  try {
+    return JSON.parse(localStorage.getItem('screenlog_pg') || '{}');
+  } catch { return {}; }
+}
+
+function savePgConfig(cfg) {
+  try { localStorage.setItem('screenlog_pg', JSON.stringify(cfg)); } catch { /* ignore */ }
+}
+
+function getPgFields() {
+  return {
+    host:     document.getElementById('pg-host').value.trim(),
+    port:     parseInt(document.getElementById('pg-port').value, 10) || 5432,
+    database: document.getElementById('pg-database').value.trim(),
+    user:     document.getElementById('pg-user').value.trim(),
+    password: document.getElementById('pg-password').value,
+  };
+}
+
+function setPgStatus(msg, isError = false) {
+  const el = document.getElementById('pg-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = isError ? '#FF3B30' : 'var(--text3)';
+}
+
+async function grafanaPushIfEnabled() {
+  const cfg = loadPgConfig();
+  if (!cfg.autopush || !cfg.host) return;
+  try {
+    const { host, port = 5432, database, user, password } = cfg;
+    const result = await window.api.pushToGrafana(host, port, database, user, password);
+    if (result && result.ok) {
+      console.log(`Grafana push: ${result.rows} rows upserted`);
+    } else if (result && result.error) {
+      console.warn('Grafana push error:', result.error);
+    }
+  } catch (e) {
+    console.warn('Grafana push failed:', e);
+  }
+}
+
+function populatePgSettings() {
+  const cfg = loadPgConfig();
+  document.getElementById('pg-host').value     = cfg.host     || '';
+  document.getElementById('pg-port').value     = cfg.port     || '';
+  document.getElementById('pg-database').value = cfg.database || '';
+  document.getElementById('pg-user').value     = cfg.user     || '';
+  document.getElementById('pg-password').value = cfg.password || '';
+  document.getElementById('pg-autopush').checked = !!cfg.autopush;
+  setPgStatus('');
 }
 
 // ── Collect button ────────────────────────────────────────────────────────────
@@ -813,12 +1183,18 @@ async function refreshLastRun() {
 
 async function refreshDevices() {
   try {
-    const { types } = await window.api.getDevices();
-    state.hasData.mac    = types.includes('mac');
-    state.hasData.iphone = types.includes('iphone');
-    state.hasData.ipad   = types.includes('ipad');
-  } catch { /* ignore */ }
-  if (!state.hasData.mac) state.hasData.mac = true;
+    const { devices } = await window.api.getDevices();
+    state.devices = devices;
+  } catch {
+    // Fallback: assume at least a Mac
+    state.devices = [{ device_id: '', device_type: 'mac', display_name: 'Mac' }];
+  }
+  // Remove stale hidden entries (device no longer present)
+  const knownIds = new Set(state.devices.map(d => d.device_id));
+  for (const id of [...state.hiddenDevices]) {
+    if (!knownIds.has(id)) state.hiddenDevices.delete(id);
+  }
+  renderDevicePills();
 }
 
 // ── Settings modal ────────────────────────────────────────────────────────────
@@ -826,6 +1202,7 @@ async function refreshDevices() {
 async function openSettings() {
   const modal = document.getElementById('settings-modal');
   modal.style.display = 'flex';
+  populatePgSettings();
 
   // Populate target input + ticks toggle
   const ti = document.getElementById('target-input');
@@ -848,6 +1225,11 @@ async function openSettings() {
   // Notifications
   document.getElementById('notif-toggle').checked = settings.notificationsEnabled;
   document.getElementById('notif-no-goal').style.display = settings.dailyTargetHours ? 'none' : '';
+
+  // (dedup-toggle lives in the header, not the settings modal)
+
+  // Load device list
+  renderDeviceSettingsList();
 
   // Load collection history
   document.getElementById('logs-loading').style.display = '';
@@ -879,14 +1261,25 @@ async function openSettings() {
         badge = `<span class="badge badge-zero">No new</span>`;
       }
 
+      // Source breakdown: show "Mac X | iPhone/iPad Y" when either source has data
+      // Fall back gracefully for old log rows that have no per-source columns (all zeros).
+      const hasSources = run.mac_fetched > 0 || run.biome_fetched > 0;
+      let sourceHtml = '';
+      if (hasSources) {
+        const parts = [];
+        if (run.mac_fetched > 0)   parts.push(`Mac ${run.mac_fetched}→${run.mac_inserted}`);
+        if (run.biome_fetched > 0) parts.push(`iPhone/iPad ${run.biome_fetched}→${run.biome_inserted}`);
+        sourceHtml = `<br><small style="color:var(--text4);font-size:11px">${parts.join(' &nbsp;·&nbsp; ')}</small>`;
+      }
+
       const errorNote = run.error
-        ? `<br><small style="color:#c0392b;font-size:11px">${run.error}</small>`
+        ? `<br><small style="color:#c0392b;font-size:11px">${escHtml(run.error)}</small>`
         : '';
 
       const tr = document.createElement('tr');
       tr.innerHTML =
         `<td class="ts">${dateStr}<span class="ts-rel">${fmtRelTime(run.ran_at)}</span></td>` +
-        `<td>${run.fetched}</td>` +
+        `<td>${run.fetched}${sourceHtml}</td>` +
         `<td>${run.inserted}</td>` +
         `<td>${badge}${errorNote}</td>`;
       tbody.appendChild(tr);
@@ -936,11 +1329,17 @@ async function init() {
   loadSettings();
   applyTheme(); // apply before any rendering
 
+  // Sync header toggle now that settings are loaded (the DOMContentLoaded wiring
+  // runs before loadSettings(), so the checkbox needs a second sync here).
+  const dedupToggleEl = document.getElementById('dedup-toggle');
+  if (dedupToggleEl) dedupToggleEl.checked = settings.deduplicateDeviceTime;
+
   window.api.onCollectProgress(async () => {
     await refreshLastRun();
     await refreshDevices();
     loadCurrentTab();
     checkGoalNotifications();
+    grafanaPushIfEnabled();
   });
 
   const fdaOk = await checkFdaAndInit();
@@ -1082,6 +1481,15 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSettings();
   });
 
+  const dedupToggle = document.getElementById('dedup-toggle');
+  dedupToggle.checked = settings.deduplicateDeviceTime;
+  dedupToggle.addEventListener('change', (e) => {
+    settings.deduplicateDeviceTime = e.target.checked;
+    saveSettings();
+    renderDevicePills();
+    loadCurrentTab();
+  });
+
   // CSV export
   document.getElementById('csv-btn').addEventListener('click', exportCsv);
 
@@ -1094,6 +1502,53 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set initial UI state
   updateModeButtons();
   updatePeriodUI();
+
+  // ── Grafana push settings ─────────────────────────────────────────────────
+  // Save config on any field change
+  ['pg-host', 'pg-port', 'pg-database', 'pg-user', 'pg-password'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+      savePgConfig({ ...loadPgConfig(), ...getPgFields() });
+    });
+  });
+  document.getElementById('pg-autopush').addEventListener('change', (e) => {
+    savePgConfig({ ...loadPgConfig(), autopush: e.target.checked });
+  });
+
+  document.getElementById('pg-test-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('pg-test-btn');
+    btn.disabled = true;
+    setPgStatus('Connecting…');
+    savePgConfig({ ...loadPgConfig(), ...getPgFields() });
+    const { host, port, database, user, password } = getPgFields();
+    try {
+      const result = await window.api.testGrafanaPush(host, port, database, user, password);
+      setPgStatus(result.ok ? '✓ Connected successfully' : `✗ ${result.error}`, !result.ok);
+    } catch (e) {
+      setPgStatus(`✗ ${e}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('pg-push-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('pg-push-btn');
+    btn.disabled = true;
+    setPgStatus('Pushing…');
+    savePgConfig({ ...loadPgConfig(), ...getPgFields() });
+    const { host, port, database, user, password } = getPgFields();
+    try {
+      const result = await window.api.pushToGrafana(host, port, database, user, password);
+      if (result.ok) {
+        setPgStatus(`✓ Pushed ${result.rows.toLocaleString()} rows`);
+      } else {
+        setPgStatus(`✗ ${result.error}`, true);
+      }
+    } catch (e) {
+      setPgStatus(`✗ ${e}`, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   // ── Window drag ───────────────────────────────────────────────────────────
   // Call the Rust start_drag command directly — more reliable than CSS-only

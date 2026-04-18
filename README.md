@@ -22,9 +22,11 @@ Screenlog reads the same underlying database that macOS populates, adds its own 
 
 - **Menu bar app** — no Dock icon; click the tray icon to show or hide the window
 - **Automatic collection** — gathers data on startup, every hour, and on every wake from sleep
+- **Multi-device** — Mac, iPhone, and iPad usage shown together with per-device colours; click device pills to hide individual devices from charts
+- **Merge overlaps** — header toggle that deduplicates simultaneous multi-device usage so time is never counted twice
 - **Daily goal** — set a target in hours; a threshold line appears on the chart and KPI cards track your success rate and streak
 - **Screen time warnings** — optional notifications at 50% and 100% of your daily goal
-- **App drill-down** — click any bar in the Overview to see that app's full daily history
+- **App drill-down** — click any bar in the Overview to see that app's full daily history, coloured by device
 - **App renaming** — give any app a friendlier display name
 - **Export** — back up the database or export the current view as CSV
 - **Dark mode** — follows system appearance, or force Light / Dark in Settings
@@ -99,14 +101,121 @@ In the Overview chart, **single-click** any bar to open a daily history chart fo
 | **Daily Goal** | Set or clear a daily screen time target; toggle tick marks |
 | **Notifications** | Screen time warnings at 50% and 100% of goal |
 | **Data** | Export DB backup, import backup, export current view as CSV |
-| **iPhone & iPad Data** | Why synced device data is unavailable on macOS 13+ |
+| **Devices** | List of devices with data; rename any device |
+| **Grafana Push** | Push data to a PostgreSQL database for Grafana dashboards |
 | **Collection History** | Log of every collection run with row counts and errors |
 
 ## iPhone & iPad data
 
-> **macOS 13+ limitation:** On Ventura and later, Apple moved synced device Screen Time data into a private, sandboxed database (`RMAdminStore-Cloud.sqlite`) that is protected beyond Full Disk Access — even `sudo` cannot read it. Only Mac usage data is available on macOS 13+.
+Screenlog reads iPhone and iPad screen time from **Apple Biome** — a local cache of iCloud-synced data stored at `~/Library/Biome/`. This requires Full Disk Access (same permission needed for Mac data) and works on macOS 13+.
 
-On macOS 12 (Monterey) and earlier, iPhone and iPad data is stored alongside Mac data and is accessible. Enable **Settings → Screen Time → Share Across Devices** on your iPhone/iPad.
+To get iPhone/iPad data:
+
+1. On your iPhone/iPad: **Settings → Screen Time → Share Across Devices** → enable it
+2. Make sure iCloud sync has had time to push data to your Mac (usually within minutes)
+3. Click **Collect now** in Screenlog — iPhone and iPad usage will appear in the charts
+
+Each physical device appears as a separate colour in the charts. You can rename devices in **Settings → Devices**.
+
+**Device filter pills** appear below the tabs when data from multiple devices is present. Click any pill to hide that device from all charts; click again to bring it back.
+
+**Merge overlaps** (toggle in the header) deduplicates minutes where multiple devices were active simultaneously. When enabled, device pills are hidden and every chart shows a single merged total — useful if you often have your iPhone and Mac open at the same time.
+
+## Grafana integration
+
+Screenlog can push daily screen time totals to a PostgreSQL database so you can build Grafana dashboards on top of your data.
+
+### Prerequisites
+
+- A running PostgreSQL instance reachable from your Mac (e.g. a home server)
+- A Grafana instance with the **PostgreSQL data source** plugin (built-in, no extra install needed)
+
+### 1 — Create a database and user on your PostgreSQL server
+
+```sql
+CREATE DATABASE screenlog;
+CREATE USER screenlog WITH PASSWORD 'your-password';
+GRANT ALL PRIVILEGES ON DATABASE screenlog TO screenlog;
+
+-- PostgreSQL 15+: also grant schema privileges
+\c screenlog
+GRANT ALL ON SCHEMA public TO screenlog;
+```
+
+### 2 — Configure Screenlog
+
+Open **Settings → Grafana Push** and fill in:
+
+| Field | Example |
+|-------|---------|
+| Host | `homeserver.local` |
+| Port | `5432` |
+| Database | `screenlog` |
+| User | `screenlog` |
+| Password | `your-password` |
+
+Click **Test connection** to verify, then **Push all data** to do the initial sync. Enable **Auto-push after collection** to keep Grafana up to date automatically.
+
+Screenlog creates the table automatically on first push:
+
+```sql
+CREATE TABLE screenlog_daily (
+    day         DATE   NOT NULL,
+    app         TEXT   NOT NULL,
+    device_id   TEXT   NOT NULL DEFAULT '',
+    device_type TEXT   NOT NULL DEFAULT 'mac',   -- mac | iphone | ipad
+    device_name TEXT   NOT NULL DEFAULT 'Mac',
+    usage_secs  BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, app, device_id)
+);
+```
+
+### 3 — Add the data source in Grafana
+
+1. **Connections → Data sources → Add new data source → PostgreSQL**
+2. Set **Host URL** to your PostgreSQL address (e.g. `homeserver.local:5432`)
+3. Set **Database**, **User**, **Password** as above
+4. Set **TLS/SSL Mode** to `disable` (unless your Postgres has TLS configured)
+5. Click **Save & test**
+
+### 4 — Example dashboard queries
+
+**Total daily screen time (hours):**
+```sql
+SELECT
+  day AS "time",
+  SUM(usage_secs) / 3600.0 AS "Total hours"
+FROM screenlog_daily
+WHERE $__timeFilter(day::timestamp)
+GROUP BY day
+ORDER BY day
+```
+
+**Top apps for the selected period:**
+```sql
+SELECT
+  app,
+  SUM(usage_secs) / 60 AS "Minutes"
+FROM screenlog_daily
+WHERE $__timeFilter(day::timestamp)
+GROUP BY app
+ORDER BY 2 DESC
+LIMIT 20
+```
+
+**Usage split by device type:**
+```sql
+SELECT
+  day AS "time",
+  device_name,
+  SUM(usage_secs) / 3600.0 AS "Hours"
+FROM screenlog_daily
+WHERE $__timeFilter(day::timestamp)
+GROUP BY day, device_name
+ORDER BY day
+```
+
+> **Time series panels:** set the panel type to **Time series**, enable **Format → Table** for the top-apps query.
 
 ## How it works
 
@@ -135,4 +244,4 @@ Collection runs on startup, every hour, and on every wake from sleep.
 
 ## Privacy
 
-All data stays on your Mac. Nothing is sent anywhere.
+All data stays on your Mac by default. Nothing is sent anywhere unless you explicitly configure and trigger the optional **Grafana Push** feature, which sends data only to the PostgreSQL server you specify.

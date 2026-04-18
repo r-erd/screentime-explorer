@@ -20,9 +20,10 @@ const APPLE_EPOCH_OFFSET: i64 = 978_307_200; // seconds between 2001-01-01 and 1
 pub struct BiomeRow {
     pub app: String,
     pub usage_seconds: f64,
-    pub start_time: i64,  // Unix timestamp
-    pub end_time: i64,    // Unix timestamp
+    pub start_time: i64,    // Unix timestamp
+    pub end_time: i64,      // Unix timestamp
     pub device_id: String,
+    pub device_model: String, // e.g. "iPhone14,5" or "iPad13,18"
 }
 
 /// Raw focus-change event decoded from an SEGB record.
@@ -44,24 +45,24 @@ pub fn collect_biome() -> (Vec<BiomeRow>, Option<String>) {
         Err(_) => return (vec![], None),
     };
 
-    let device_ids = match get_ios_device_ids(&home) {
+    let devices = match get_ios_device_ids(&home) {
         Ok(ids) => ids,
         Err(e)  => return (vec![], Some(format!("Biome sync.db: {}", e))),
     };
 
-    if device_ids.is_empty() {
+    if devices.is_empty() {
         return (vec![], None);
     }
 
     let mut all_rows: Vec<BiomeRow> = Vec::new();
     let mut errors: Vec<String>     = Vec::new();
 
-    for device_id in &device_ids {
+    for (device_id, device_model) in &devices {
         let dir = PathBuf::from(&home)
             .join("Library/Biome/streams/restricted/App.InFocus/remote")
             .join(device_id);
 
-        match collect_device(&dir, device_id) {
+        match collect_device(&dir, device_id, device_model) {
             Ok(rows) => all_rows.extend(rows),
             Err(e)   => errors.push(format!(
                 "device {}: {}",
@@ -77,7 +78,11 @@ pub fn collect_biome() -> (Vec<BiomeRow>, Option<String>) {
 
 // ── Device discovery ──────────────────────────────────────────────────────────
 
-fn get_ios_device_ids(home: &str) -> Result<Vec<String>, String> {
+/// Returns `(device_id, device_model)` pairs for all paired iOS/iPadOS devices.
+/// `device_model` is e.g. "iPhone14,5" or "iPad13,18" — the existing
+/// `device_type_expr` SQL already handles those prefixes correctly.
+/// Falls back to "iPhone" if `hardware_id` is not available.
+fn get_ios_device_ids(home: &str) -> Result<Vec<(String, String)>, String> {
     let path = PathBuf::from(home).join("Library/Biome/sync/sync.db");
     if !path.exists() {
         return Ok(vec![]);  // Biome not present — old macOS or no iCloud sync
@@ -89,23 +94,60 @@ fn get_ios_device_ids(home: &str) -> Result<Vec<String>, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT device_identifier FROM DevicePeer WHERE platform = 2")
-        .map_err(|e| e.to_string())?;
+    // Check whether a hardware_id column exists (not guaranteed on all macOS versions).
+    let has_hardware_id: bool = conn
+        .prepare("PRAGMA table_info(DevicePeer)")
+        .ok()
+        .and_then(|mut s| {
+            s.query_map([], |r| r.get::<_, String>(1)).ok()
+                .map(|iter| iter.filter_map(|r| r.ok()).any(|col| col == "hardware_id"))
+        })
+        .unwrap_or(false);
 
-    let ids: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+    let devices: Vec<(String, String)> = if has_hardware_id {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT device_identifier, COALESCE(hardware_id, '') FROM DevicePeer WHERE platform = 2")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String)> = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
-        .filter(|s| !s.is_empty())
         .collect();
+        rows.into_iter()
+        .filter(|(id, _)| !id.is_empty())
+        .map(|(id, hw)| {
+            // Normalise: "iPad13,18" → kept as-is (matches LIKE 'ipad%')
+            //            "iPhone14,5" → kept as-is (matches LIKE 'iphone%')
+            //            anything else → fall back to "iPhone"
+            let model = if !hw.is_empty() { hw } else { "iPhone".to_string() };
+            (id, model)
+        })
+        .collect()
+    } else {
+        // No hardware_id column — default all to iPhone
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT device_identifier FROM DevicePeer WHERE platform = 2")
+            .map_err(|e| e.to_string())?;
+        let ids: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        ids.into_iter()
+            .filter(|s| !s.is_empty())
+            .map(|id| (id, "iPhone".to_string()))
+            .collect()
+    };
 
-    Ok(ids)
+    Ok(devices)
 }
 
 // ── Per-device collection ─────────────────────────────────────────────────────
 
-fn collect_device(dir: &PathBuf, device_id: &str) -> Result<Vec<BiomeRow>, String> {
+fn collect_device(dir: &PathBuf, device_id: &str, device_model: &str) -> Result<Vec<BiomeRow>, String> {
     if !dir.exists() {
         return Ok(vec![]);  // Device dir not yet synced
     }
@@ -142,7 +184,7 @@ fn collect_device(dir: &PathBuf, device_id: &str) -> Result<Vec<BiomeRow>, Strin
     // Sort by timestamp (files are ordered but events within a file may not cross-sort).
     all_events.sort_by_key(|e| e.unix_ts);
 
-    Ok(stitch_events(all_events, device_id))
+    Ok(stitch_events(all_events, device_id, device_model))
 }
 
 // ── SEGB version dispatch ─────────────────────────────────────────────────────
@@ -405,7 +447,7 @@ fn read_varint(data: &[u8], mut pos: usize) -> Option<(u64, usize)> {
 //     OR when a different app gains focus (implicit close)
 // Intervals longer than 24 h are discarded as likely artifacts.
 
-fn stitch_events(events: Vec<FocusEvent>, device_id: &str) -> Vec<BiomeRow> {
+fn stitch_events(events: Vec<FocusEvent>, device_id: &str, device_model: &str) -> Vec<BiomeRow> {
     const MAX_SESSION_SECS: i64 = 86_400; // 24 h sanity cap
 
     let mut rows: Vec<BiomeRow>    = Vec::new();
@@ -421,6 +463,7 @@ fn stitch_events(events: Vec<FocusEvent>, device_id: &str) -> Vec<BiomeRow> {
                 start_time:    start,
                 end_time:      end,
                 device_id:     device_id.to_string(),
+                device_model:  device_model.to_string(),
             });
         }
     };
