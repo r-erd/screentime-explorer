@@ -334,7 +334,27 @@
     }
     .card-title {
       font-size: 12px; font-weight: 600; color: var(--text3);
-      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 16px;
+      text-transform: uppercase; letter-spacing: 0.6px;
+    }
+    /* Row that holds the card title + optional chart-type toggle */
+    .card-title-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    /* Chart type toggle (Bar / Line) inside chart cards */
+    .chart-type-toggle {
+      display: flex; background: var(--ctrl-bg); border-radius: 7px;
+      padding: 2px; gap: 2px;
+    }
+    .chart-type-btn {
+      padding: 3px 10px; border-radius: 5px; border: none;
+      background: transparent; cursor: pointer; font-size: 11px;
+      font-weight: 500; color: var(--text4); font-family: inherit;
+      transition: all 0.15s; white-space: nowrap; line-height: 1.6;
+    }
+    .chart-type-btn.active {
+      background: var(--surface); color: var(--text); font-weight: 600;
+      box-shadow: 0 1px 2px var(--shadow-sm);
     }
     .chart-wrap { position: relative; user-select: none; }
     .no-data { text-align: center; color: var(--text4); font-size: 15px; padding: 60px 0; }
@@ -659,7 +679,13 @@
     </div>
 
     <div class="chart-card">
-      <div class="card-title">Usage Per Day</div>
+      <div class="card-title-row">
+        <div class="card-title">Usage Per Day</div>
+        <div class="chart-type-toggle" id="dy-chart-type">
+          <button class="chart-type-btn active" data-type="bar">Bar</button>
+          <button class="chart-type-btn" data-type="line">Line</button>
+        </div>
+      </div>
       <div id="dy-loading" class="loading">Loading…</div>
       <div id="dy-nodata" class="no-data" style="display:none">No data for this period.</div>
       <div class="chart-wrap" id="dy-wrap" style="display:none; height:280px"><canvas id="dy-chart"></canvas></div>
@@ -673,7 +699,13 @@
       <div class="stat-card"><div class="label">Quietest Hour</div><div class="value" id="hr-quiet">—</div></div>
     </div>
     <div class="chart-card">
-      <div class="card-title">Average Usage by Hour of Day</div>
+      <div class="card-title-row">
+        <div class="card-title">Average Usage by Hour of Day</div>
+        <div class="chart-type-toggle" id="hr-chart-type">
+          <button class="chart-type-btn active" data-type="bar">Bar</button>
+          <button class="chart-type-btn" data-type="line">Line</button>
+        </div>
+      </div>
       <div id="hr-loading" class="loading">Loading…</div>
       <div id="hr-nodata" class="no-data" style="display:none">No data for this period.</div>
       <div class="chart-wrap" id="hr-wrap" style="display:none; height:260px"><canvas id="hr-chart"></canvas></div>

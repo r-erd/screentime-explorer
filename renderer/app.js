@@ -18,6 +18,7 @@ const settings = {
   appearance:             'system',  // 'system' | 'light' | 'dark'
   notificationsEnabled:   false,
   deduplicateDeviceTime:  false,
+  chartStyle:             'bar',     // 'bar' | 'line'
 };
 
 const charts = {};
@@ -68,6 +69,14 @@ function getDeviceColor(deviceType, typeIndex) {
 
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 // ── Chart grid helper ─────────────────────────────────────────────────────────
@@ -269,6 +278,29 @@ function renderDeviceBreakdown(elId, byDeviceTotals) {
 
   el.innerHTML = parts.join('');
   el.style.display = '';
+}
+
+// Reflect settings.chartStyle into both toggle groups.
+function syncChartTypeToggles() {
+  document.querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === settings.chartStyle);
+  });
+}
+
+// Build a Chart.js line-chart dataset. fillArea=true adds a translucent area fill.
+function lineDs(label, data, color, fillArea) {
+  return {
+    label,
+    data,
+    borderColor:     color,
+    backgroundColor: fillArea ? hexToRgba(color, 0.12) : 'transparent',
+    fill:            fillArea ? 'origin' : false,
+    tension:         0.4,
+    borderWidth:     2,
+    pointRadius:     3,
+    pointHoverRadius: 5,
+    pointBackgroundColor: color,
+  };
 }
 
 // ── Device filter pills ───────────────────────────────────────────────────────
@@ -537,15 +569,30 @@ async function loadDaily() {
   const targetSec = settings.dailyTargetHours ? settings.dailyTargetHours * 3600 : null;
   const targetMin = settings.dailyTargetHours ? settings.dailyTargetHours * 60   : null;
 
-  // When dedup is on, show a single bar per day using the deduplicated total
-  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const datasets = dedup
-    ? [{
-        label: 'Deduplicated',
-        data:  days.map(d => Math.round(d.dedup_total / 60)),
-        backgroundColor: dark ? '#e5e5e5' : '#1d1d1f',
-      }]
-    : deviceDatasets(dev => days.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60)));
+  const dark    = document.documentElement.getAttribute('data-theme') === 'dark';
+  const isLine  = settings.chartStyle === 'line';
+  const singleColor = dark ? '#e5e5e5' : '#1d1d1f';
+
+  let datasets;
+  if (isLine) {
+    if (dedup) {
+      datasets = [lineDs('Deduplicated', days.map(d => Math.round(d.dedup_total / 60)), singleColor, true)];
+    } else {
+      const visDevs = visibleDevices();
+      datasets = state.devices.map((dev, i) => {
+        const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+        const color   = getDeviceColor(dev.device_type, typeIdx);
+        const data    = days.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60));
+        // Fill area only when there's a single visible device — looks clean; skip for multi-line
+        return { ...lineDs(dev.display_name, data, color, visDevs.length === 1), hidden: state.hiddenDevices.has(dev.device_id) };
+      });
+    }
+  } else {
+    // Bar chart (original behaviour)
+    datasets = dedup
+      ? [{ label: 'Deduplicated', data: days.map(d => Math.round(d.dedup_total / 60)), backgroundColor: singleColor }]
+      : deviceDatasets(dev => days.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60)));
+  }
 
   // Inline plugin: threshold line + green tick marks above bars that meet the goal
   const targetLinePlugin = {
@@ -635,8 +682,9 @@ async function loadDaily() {
     },
   };
 
+  const stackBars = !dedup && !isLine;
   charts['dy'] = new Chart(document.getElementById('dy-chart'), {
-    type: 'bar',
+    type: isLine ? 'line' : 'bar',
     data: { labels: days.map(d => fmtDate(d.date)), datasets },
     options: {
       responsive: true,
@@ -645,22 +693,22 @@ async function loadDaily() {
         legend: {
           display: !dedup && state.devices.length > 1,
           position: 'top',
-          labels: { boxWidth: 10, font: { size: 11 } },
+          labels: { boxWidth: 10, font: { size: 11 }, ...(isLine ? { usePointStyle: true, pointStyle: 'line' } : {}) },
         },
         tooltip: {
           callbacks: {
             label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
-            footer: dedup ? undefined : items => {
+            footer: (!isLine && !dedup) ? items => {
               if (items.length < 2) return [];
               const total = items.reduce((s, i) => s + i.raw, 0);
               return [`Total: ${fmtHours(total * 60)}`];
-            },
+            } : undefined,
           },
         },
       },
       scales: {
-        x: { stacked: !dedup, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: !dedup, suggestedMax: targetMin ?? undefined, ticks: { stepSize: niceStepMin(Math.max(targetMin ?? 0, Math.max(...totals.map(t => t / 60)))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        x: { stacked: stackBars, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: stackBars, suggestedMax: targetMin ?? undefined, ticks: { stepSize: niceStepMin(Math.max(targetMin ?? 0, Math.max(...totals.map(t => t / 60)))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
     plugins: [targetLinePlugin],
@@ -758,17 +806,32 @@ async function loadHourly() {
   showTabState('hr', 'data');
   destroyChart('hr');
 
-  const dark     = document.documentElement.getAttribute('data-theme') === 'dark';
-  const hrDatasets = dedup
-    ? [{
-        label: 'Deduplicated',
-        data:  hours.map(h => Math.round(h.dedup_secs / 60)),
-        backgroundColor: dark ? '#e5e5e5' : '#1d1d1f',
-      }]
-    : deviceDatasets(dev => avgd.map(h => Math.round((h.by_device[dev.device_id] || 0) / 60)));
+  const dark    = document.documentElement.getAttribute('data-theme') === 'dark';
+  const isLine  = settings.chartStyle === 'line';
+  const hrSingleColor = dark ? '#e5e5e5' : '#1d1d1f';
 
+  let hrDatasets;
+  if (isLine) {
+    if (dedup) {
+      hrDatasets = [lineDs('Deduplicated', hours.map(h => Math.round(h.dedup_secs / 60)), hrSingleColor, true)];
+    } else {
+      const visDevs = visibleDevices();
+      hrDatasets = state.devices.map((dev, i) => {
+        const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+        const color   = getDeviceColor(dev.device_type, typeIdx);
+        const data    = avgd.map(h => Math.round((h.by_device[dev.device_id] || 0) / 60));
+        return { ...lineDs(dev.display_name, data, color, visDevs.length === 1), hidden: state.hiddenDevices.has(dev.device_id) };
+      });
+    }
+  } else {
+    hrDatasets = dedup
+      ? [{ label: 'Deduplicated', data: hours.map(h => Math.round(h.dedup_secs / 60)), backgroundColor: hrSingleColor }]
+      : deviceDatasets(dev => avgd.map(h => Math.round((h.by_device[dev.device_id] || 0) / 60)));
+  }
+
+  const stackBars = !dedup && !isLine;
   charts['hr'] = new Chart(document.getElementById('hr-chart'), {
-    type: 'bar',
+    type: isLine ? 'line' : 'bar',
     data: { labels: hours.map(h => fmtHour(h.hour)), datasets: hrDatasets },
     options: {
       responsive: true,
@@ -777,15 +840,15 @@ async function loadHourly() {
         legend: {
           display: !dedup && state.devices.length > 1,
           position: 'top',
-          labels: { boxWidth: 10, font: { size: 11 } },
+          labels: { boxWidth: 10, font: { size: 11 }, ...(isLine ? { usePointStyle: true, pointStyle: 'line' } : {}) },
         },
         tooltip: {
           callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)} avg` },
         },
       },
       scales: {
-        x: { stacked: !dedup, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: { stacked: !dedup, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+        x: { stacked: stackBars, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: stackBars, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
   });
@@ -1333,6 +1396,7 @@ async function init() {
   // runs before loadSettings(), so the checkbox needs a second sync here).
   const dedupToggleEl = document.getElementById('dedup-toggle');
   if (dedupToggleEl) dedupToggleEl.checked = settings.deduplicateDeviceTime;
+  syncChartTypeToggles();
 
   window.api.onCollectProgress(async () => {
     await refreshLastRun();
@@ -1488,6 +1552,20 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSettings();
     renderDevicePills();
     loadCurrentTab();
+  });
+
+  // Chart type toggles (Bar / Line) — shared setting, applies to Daily + Hourly
+  ['dy-chart-type', 'hr-chart-type'].forEach(groupId => {
+    document.getElementById(groupId).addEventListener('click', (e) => {
+      const btn = e.target.closest('.chart-type-btn');
+      if (!btn) return;
+      const type = btn.dataset.type;
+      if (type === settings.chartStyle) return;
+      settings.chartStyle = type;
+      saveSettings();
+      syncChartTypeToggles();
+      loadCurrentTab();
+    });
   });
 
   // CSV export
