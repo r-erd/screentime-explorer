@@ -595,6 +595,7 @@
 <nav class="tabs">
   <button class="tab-btn active" data-tab="overview">Overview</button>
   <button class="tab-btn" data-tab="daily">Daily</button>
+  <button class="tab-btn" data-tab="monthly" style="display:none">Monthly</button>
   <button class="tab-btn" data-tab="hourly">Hourly</button>
   <span id="last-run">Last run: —</span>
 </nav>
@@ -718,6 +719,26 @@
       <div id="hr-loading" class="loading">Loading…</div>
       <div id="hr-nodata" class="no-data" style="display:none">No data for this period.</div>
       <div class="chart-wrap" id="hr-wrap" style="display:none; height:260px"><canvas id="hr-chart"></canvas></div>
+    </div>
+  </div>
+
+  <div id="tab-monthly" class="tab-content">
+    <div class="stats">
+      <div class="stat-card"><div class="label">Total Screen Time</div><div class="value" id="mo-total">—</div></div>
+      <div class="stat-card"><div class="label">Monthly Average</div><div class="value" id="mo-avg">—</div></div>
+      <div class="stat-card"><div class="label">Peak Month</div><div class="value" id="mo-peak">—</div></div>
+    </div>
+    <div class="chart-card">
+      <div class="card-title-row">
+        <div class="card-title">Usage Per Month</div>
+        <div class="chart-type-toggle" id="mo-chart-type">
+          <button class="chart-type-btn active" data-type="bar">Bar</button>
+          <button class="chart-type-btn" data-type="line">Line</button>
+        </div>
+      </div>
+      <div id="mo-loading" class="loading">Loading…</div>
+      <div id="mo-nodata" class="no-data" style="display:none">No data for this period.</div>
+      <div class="chart-wrap" id="mo-wrap" style="display:none; height:280px"><canvas id="mo-chart"></canvas></div>
     </div>
   </div>
 </main>

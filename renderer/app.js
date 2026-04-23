@@ -127,6 +127,12 @@ function fmtDate(isoDate) {
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function fmtMonth(yearMonth) {
+  // yearMonth = 'YYYY-MM'
+  const [y, m] = yearMonth.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+}
+
 // Like fmtDate but includes the year when the date is not in the current year.
 function fmtDateWithYear(isoDate) {
   const [y, m, d] = isoDate.split('-').map(Number);
@@ -288,9 +294,9 @@ function renderDeviceBreakdown(elId, byDeviceTotals) {
   el.style.display = '';
 }
 
-// Reflect settings.chartStyle into the Daily/Hourly toggle groups.
+// Reflect settings.chartStyle into the Daily / Hourly / Monthly toggle groups.
 function syncChartTypeToggles() {
-  ['dy-chart-type', 'hr-chart-type'].forEach(id => {
+  ['dy-chart-type', 'hr-chart-type', 'mo-chart-type'].forEach(id => {
     document.getElementById(id)?.querySelectorAll('.chart-type-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.type === settings.chartStyle);
     });
@@ -384,11 +390,11 @@ function updateModeButtons() {
     btn.classList.toggle('active', btn.dataset.mode === state.mode);
   });
 
-  // Hide "Daily" tab button if mode is "day"
-  const dailyTabBtn = document.querySelector('.tab-btn[data-tab="daily"]');
-  if (dailyTabBtn) {
-    dailyTabBtn.style.display = (state.mode === 'day') ? 'none' : '';
-  }
+  // Hide "Daily" tab in Day mode; show "Monthly" tab only in Year mode
+  const dailyTabBtn   = document.querySelector('.tab-btn[data-tab="daily"]');
+  const monthlyTabBtn = document.querySelector('.tab-btn[data-tab="monthly"]');
+  if (dailyTabBtn)   dailyTabBtn.style.display   = (state.mode === 'day')  ? 'none' : '';
+  if (monthlyTabBtn) monthlyTabBtn.style.display  = (state.mode === 'year') ? ''     : 'none';
 }
 
 
@@ -404,6 +410,7 @@ function switchTab(tab) {
 function loadCurrentTab() {
   if      (state.activeTab === 'overview') loadOverview();
   else if (state.activeTab === 'daily')    loadDaily();
+  else if (state.activeTab === 'monthly')  loadMonthly();
   else if (state.activeTab === 'hourly')   loadHourly();
 }
 
@@ -544,19 +551,7 @@ async function loadOverview() {
         plugins: {
           legend: {
             position: 'right',
-            labels: { boxWidth: 10, font: { size: 11 }, padding: 10,
-              generateLabels: chart => {
-                const ds = chart.data.datasets[0];
-                return chart.data.labels.map((label, i) => ({
-                  text:            label,
-                  fillStyle:       ds.backgroundColor[i],
-                  strokeStyle:     ds.backgroundColor[i],
-                  lineWidth:       0,
-                  hidden:          false,
-                  index:           i,
-                }));
-              },
-            },
+            labels: { boxWidth: 10, font: { size: 11 }, padding: 10 },
           },
           tooltip: {
             callbacks: {
@@ -963,6 +958,111 @@ async function loadHourly() {
         },
         tooltip: {
           callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)} avg` },
+        },
+      },
+      scales: {
+        x: { stacked: stackBars, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: stackBars, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+      },
+    },
+  });
+}
+
+// ── Monthly (Year mode only) ──────────────────────────────────────────────────
+
+async function loadMonthly() {
+  showTabState('mo', 'loading');
+  const [from, to] = getApiRange();
+  const { days } = await window.api.getDaily(from, to);
+
+  // Aggregate daily rows into month buckets
+  const monthMap = new Map(); // 'YYYY-MM' -> bucket
+  for (const day of days) {
+    const key = day.date.slice(0, 7);
+    if (!monthMap.has(key)) monthMap.set(key, { key, by_device: {}, dedup_total: 0 });
+    const b = monthMap.get(key);
+    b.dedup_total += day.dedup_total || 0;
+    for (const [id, secs] of Object.entries(day.by_device || {})) {
+      b.by_device[id] = (b.by_device[id] || 0) + secs;
+    }
+  }
+  const months = [...monthMap.values()];
+
+  const dedup  = settings.deduplicateDeviceTime;
+  const totals = months.map(m => dedup ? m.dedup_total : rowTotal(m));
+  const grandTotal = totals.reduce((s, v) => s + v, 0);
+
+  if (grandTotal === 0) {
+    showTabState('mo', 'nodata');
+    document.getElementById('mo-total').textContent = '—';
+    document.getElementById('mo-avg').textContent   = '—';
+    document.getElementById('mo-peak').textContent  = '—';
+    return;
+  }
+
+  const nonZero  = totals.filter(v => v > 0);
+  const avg      = grandTotal / Math.max(1, nonZero.length);
+  const peakIdx  = totals.indexOf(Math.max(...totals));
+  const peakKey  = months[peakIdx].key; // 'YYYY-MM'
+  const peakYear = Number(peakKey.split('-')[0]);
+  const peakLabel = fmtMonth(peakKey) + (peakYear !== new Date().getFullYear() ? ` ${peakYear}` : '');
+
+  document.getElementById('mo-total').textContent = fmtHours(grandTotal);
+  document.getElementById('mo-avg').textContent   = fmtHours(avg);
+  document.getElementById('mo-peak').textContent  = peakLabel;
+
+  showTabState('mo', 'data');
+  destroyChart('mo');
+
+  const dark   = document.documentElement.getAttribute('data-theme') === 'dark';
+  const isLine = settings.chartStyle === 'line';
+  const singleColor = dark ? '#e5e5e5' : '#1d1d1f';
+
+  let datasets;
+  if (isLine) {
+    if (dedup) {
+      datasets = [lineDs('Deduplicated', months.map(m => Math.round(m.dedup_total / 60)), singleColor, true)];
+    } else {
+      const visDevs = visibleDevices();
+      datasets = state.devices.map((dev, i) => {
+        const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+        const color   = getDeviceColor(dev.device_type, typeIdx);
+        const data    = months.map(m => Math.round((m.by_device[dev.device_id] || 0) / 60));
+        return { ...lineDs(dev.display_name, data, color, visDevs.length === 1), hidden: state.hiddenDevices.has(dev.device_id) };
+      });
+    }
+  } else {
+    datasets = dedup
+      ? [{ label: 'Deduplicated', data: months.map(m => Math.round(m.dedup_total / 60)), backgroundColor: singleColor }]
+      : deviceDatasets(dev => months.map(m => Math.round((m.by_device[dev.device_id] || 0) / 60)));
+  }
+
+  const stackBars = !dedup && !isLine;
+  charts['mo'] = new Chart(document.getElementById('mo-chart'), {
+    type: isLine ? 'line' : 'bar',
+    data: { labels: months.map(m => fmtMonth(m.key)), datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: !dedup && state.devices.length > 1,
+          position: 'top',
+          labels: { boxWidth: 10, font: { size: 11 }, ...(isLine ? { usePointStyle: true, pointStyle: 'line' } : {}) },
+        },
+        tooltip: {
+          callbacks: {
+            title: items => {
+              const m = months[items[0].dataIndex];
+              const [y] = m.key.split('-');
+              return `${fmtMonth(m.key)} ${y}`;
+            },
+            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+            footer: (!isLine && !dedup) ? items => {
+              if (items.length < 2) return [];
+              return [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`];
+            } : undefined,
+          },
         },
       },
       scales: {
@@ -1548,13 +1648,18 @@ document.addEventListener('DOMContentLoaded', () => {
       state.mode   = btn.dataset.mode;
       state.offset = 0;
 
-      if (state.mode === 'day' && state.activeTab === 'daily') {
-        switchTab('overview');
-      }
+      const needsRedirect =
+        (state.mode === 'day'  && state.activeTab === 'daily')   ||
+        (state.mode !== 'year' && state.activeTab === 'monthly');
 
       updateModeButtons();
       updatePeriodUI();
-      loadCurrentTab();
+
+      if (needsRedirect) {
+        switchTab('overview'); // calls loadCurrentTab internally
+      } else {
+        loadCurrentTab();
+      }
     });
   });
 
@@ -1674,8 +1779,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCurrentTab();
   });
 
-  // Chart type toggles (Bar / Line) — Daily + Hourly
-  ['dy-chart-type', 'hr-chart-type'].forEach(groupId => {
+  // Chart type toggles (Bar / Line) — Daily, Monthly + Hourly
+  ['dy-chart-type', 'mo-chart-type', 'hr-chart-type'].forEach(groupId => {
     document.getElementById(groupId).addEventListener('click', (e) => {
       const btn = e.target.closest('.chart-type-btn');
       if (!btn) return;
