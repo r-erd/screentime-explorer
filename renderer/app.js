@@ -491,16 +491,19 @@ async function loadOverview() {
   try { renderKpis(days, kpiTotals, 'ov'); } catch (e) { console.error('KPI render error:', e); }
 
   const numDays = Math.max(1, Math.round((to - from) / 86400));
+  // Use all merged apps (not just the chart's top 15) so dedup and non-dedup
+  // are computed over the same universe of apps — otherwise non-dedup is
+  // artificially small and toggling dedup ON can make the number go *up*.
   const total   = settings.deduplicateDeviceTime
     ? periodDedupSec
-    : filtered.reduce((s, a) => s + rowTotal(a), 0);
+    : mergedApps.reduce((s, a) => s + rowTotal(a), 0);
   document.getElementById('ov-total').textContent = fmtHours(total);
   document.getElementById('ov-apps').textContent  = String(filtered.length);
   document.getElementById('ov-avg').textContent   = fmtHours(total / numDays);
 
-  // Per-device breakdown under "Total Screen Time"
+  // Per-device breakdown under "Total Screen Time" — also use all apps
   const ovDevTotals = {};
-  for (const app of filtered) {
+  for (const app of mergedApps) {
     for (const [devId, secs] of Object.entries(app.by_device || {})) {
       ovDevTotals[devId] = (ovDevTotals[devId] || 0) + secs;
     }
