@@ -510,6 +510,66 @@
       background: var(--text); color: var(--surface); cursor: pointer;
     }
 
+    /* ── Drilldown action bar ── */
+    .dd-actions {
+      display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    }
+    .dd-action-btn {
+      font-family: inherit; font-size: 12px; color: var(--text3);
+      background: none; border: 1px solid var(--border-ctrl);
+      border-radius: 6px; cursor: pointer; padding: 3px 9px; white-space: nowrap;
+      transition: border-color 0.12s, color 0.12s;
+    }
+    .dd-action-btn:hover { border-color: var(--text3); color: var(--text2); }
+
+    /* ── Merge picker ── */
+    .merge-picker {
+      margin-bottom: 12px; border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .merge-picker-search {
+      width: 100%; font-size: 13px; font-family: inherit;
+      padding: 9px 12px; border: none; border-bottom: 1px solid var(--border);
+      outline: none; background: var(--surface); color: var(--text);
+      box-sizing: border-box;
+    }
+    .merge-picker-list {
+      max-height: 180px; overflow-y: auto;
+    }
+    .merge-picker-item {
+      padding: 8px 12px; cursor: pointer; font-size: 13px;
+      color: var(--text2); border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.1s;
+    }
+    .merge-picker-item:last-child { border-bottom: none; }
+    .merge-picker-item:hover { background: var(--bg); color: var(--text); }
+    .merge-picker-item .mpi-sub { font-size: 11px; color: var(--text4); margin-top: 1px; }
+    .merge-confirm-row {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 10px 0; font-size: 13px; color: var(--text2);
+    }
+    .merge-confirm-row strong { color: var(--text); }
+    .merge-confirm-yes {
+      font-family: inherit; font-size: 12px; font-weight: 600;
+      padding: 4px 12px; border: none; border-radius: 6px;
+      background: var(--text); color: var(--surface); cursor: pointer;
+    }
+    .merge-confirm-no {
+      font-family: inherit; font-size: 12px; padding: 4px 10px;
+      border: 1px solid var(--border-ctrl); border-radius: 6px;
+      background: none; color: var(--text3); cursor: pointer;
+    }
+
+    /* ── App Merges settings list ── */
+    .merge-list-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0; border-bottom: 1px solid var(--border-subtle); gap: 12px;
+    }
+    .merge-list-row:last-child { border-bottom: none; }
+    .merge-list-names { font-size: 13px; color: var(--text2); }
+    .merge-list-names strong { color: var(--text); font-weight: 600; }
+    .merge-list-names .mlr-arrow { color: var(--text4); margin: 0 4px; }
+
     /* ── Responsive header: stage 1 — hide h1 + merge label, tighten gaps ── */
     @media (max-width: 860px) {
       header { gap: 10px; padding-right: 16px; }
@@ -860,6 +920,15 @@
       </div>
     </div>
 
+    <!-- App Merges -->
+    <div class="settings-section">
+      <div class="settings-section-title">App Merges</div>
+      <div id="merges-empty" style="font-size:13px;color:var(--text4);padding:4px 0">
+        No merges configured. Open an app's history and click <strong>Merge with…</strong> to combine two entries.
+      </div>
+      <div id="merges-list"></div>
+    </div>
+
     <!-- Grafana Push -->
     <div class="settings-section">
       <div class="settings-section-title">Grafana Push</div>
@@ -961,9 +1030,31 @@
   <div class="modal-card" style="max-width:680px">
     <div class="modal-header">
       <span class="modal-title" id="drilldown-title">Usage History</span>
-      <button id="drilldown-close" class="modal-close">✕</button>
+      <div class="dd-actions">
+        <div class="chart-type-toggle" id="dd-chart-type">
+          <button class="chart-type-btn active" data-type="bar">Bar</button>
+          <button class="chart-type-btn" data-type="line">Line</button>
+        </div>
+        <button id="dd-rename-btn" class="dd-action-btn">Rename…</button>
+        <button id="dd-merge-btn" class="dd-action-btn">Merge with…</button>
+        <button id="drilldown-close" class="modal-close">✕</button>
+      </div>
     </div>
-    <div id="drilldown-subtitle" style="font-size:12px; color:var(--text4); margin-bottom:16px;"></div>
+    <div id="drilldown-subtitle" style="font-size:12px; color:var(--text4); margin-top:2px; margin-bottom:12px;"></div>
+
+    <!-- Merge picker — shown when "Merge with…" is clicked -->
+    <div id="dd-merge-picker" style="display:none">
+      <div class="merge-picker">
+        <input id="dd-merge-search" class="merge-picker-search" type="text" placeholder="Search for app to merge into…">
+        <div id="dd-merge-list" class="merge-picker-list"></div>
+      </div>
+      <div id="dd-merge-confirm" class="merge-confirm-row" style="display:none">
+        <span id="dd-merge-confirm-text"></span>
+        <button id="dd-merge-yes" class="merge-confirm-yes">Merge</button>
+        <button id="dd-merge-no"  class="merge-confirm-no">Cancel</button>
+      </div>
+    </div>
+
     <div id="drilldown-loading" class="loading" style="padding:40px 0">Loading…</div>
     <div id="drilldown-nodata" class="no-data" style="display:none; padding:40px 0">No data for this period.</div>
     <div class="chart-wrap" id="drilldown-wrap" style="display:none; height:260px">

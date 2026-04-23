@@ -20,6 +20,8 @@ const settings = {
   deduplicateDeviceTime:  false,
   chartStyle:             'bar',     // 'bar' | 'line'  — Daily & Hourly
   chartStyleOverview:     'bar',     // 'bar' | 'doughnut' | 'treemap'
+  chartStyleDrilldown:    'bar',     // 'bar' | 'line'  — App drilldown
+  appMerges:              [],        // [{primary, primaryName, secondary, secondaryName}]
 };
 
 // Categorical palette for donut/treemap — Apple system colours, all dark enough for white text
@@ -30,6 +32,13 @@ const OV_PALETTE = [
 ];
 
 const charts = {};
+
+// Raw apps from the last overview fetch — used by the merge picker in drilldown.
+let cachedAllApps = [];
+
+// Drilldown state — stored so chart type toggle can re-render without re-fetching.
+let ddChartRows   = [];
+let ddLabelFn     = null;
 
 // ── Settings persistence ──────────────────────────────────────────────────────
 
@@ -310,6 +319,31 @@ function syncOverviewToggle() {
   });
 }
 
+// ── App merges ────────────────────────────────────────────────────────────────
+
+// Apply just-in-time app merges to a raw apps array.
+// Returns a new array where secondaries are absorbed into their primary;
+// the primary gains `mergedFrom: [secondary_app_id, ...]` for multi-fetch in drilldown.
+function applyMerges(apps) {
+  if (!settings.appMerges || settings.appMerges.length === 0) return apps;
+  const result    = apps.map(a => ({ ...a, by_device: { ...a.by_device } }));
+  const toRemove  = new Set();
+  for (const merge of settings.appMerges) {
+    const pIdx = result.findIndex(a => a.app === merge.primary);
+    const sIdx = result.findIndex(a => a.app === merge.secondary);
+    if (pIdx === -1 || sIdx === -1) continue;
+    const p = result[pIdx];
+    const s = result[sIdx];
+    for (const [devId, secs] of Object.entries(s.by_device || {})) {
+      p.by_device[devId] = (p.by_device[devId] || 0) + secs;
+    }
+    if (!p.mergedFrom) p.mergedFrom = [];
+    if (!p.mergedFrom.includes(merge.secondary)) p.mergedFrom.push(merge.secondary);
+    toRemove.add(sIdx);
+  }
+  return result.filter((_, i) => !toRemove.has(i));
+}
+
 // Build a Chart.js line-chart dataset. fillArea=true adds a translucent area fill.
 function lineDs(label, data, color, fillArea) {
   return {
@@ -434,7 +468,10 @@ async function loadOverview() {
     window.api.getDaily(from, to),
   ]);
 
-  const filtered = apps.filter(a => rowTotal(a) > 0).slice(0, 15);
+  // Cache raw apps for the drilldown merge picker, then apply just-in-time merges.
+  cachedAllApps = apps;
+  const mergedApps = applyMerges(apps);
+  const filtered = mergedApps.filter(a => rowTotal(a) > 0).slice(0, 15);
 
   if (filtered.length === 0) {
     showTabState('ov', 'nodata');
@@ -1198,6 +1235,113 @@ async function renderDeviceSettingsList() {
   }
 }
 
+// ── Merge settings list ───────────────────────────────────────────────────────
+
+function renderMergeSettingsList() {
+  const container = document.getElementById('merges-list');
+  const emptyEl   = document.getElementById('merges-empty');
+  if (!container || !emptyEl) return;
+
+  const merges = settings.appMerges || [];
+  if (merges.length === 0) {
+    container.innerHTML = '';
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  container.innerHTML = '';
+
+  for (const merge of merges) {
+    const row = document.createElement('div');
+    row.className = 'merge-list-row';
+    row.innerHTML =
+      `<div class="merge-list-names">` +
+        `<strong>${escHtml(merge.primaryName || merge.primary)}</strong>` +
+        `<span class="mlr-arrow"> ← </span>` +
+        `${escHtml(merge.secondaryName || merge.secondary)}` +
+      `</div>` +
+      `<button class="target-clear-btn">Remove</button>`;
+    const btn      = row.querySelector('button');
+    const snapshot = { ...merge };
+    btn.addEventListener('click', () => {
+      settings.appMerges = (settings.appMerges || []).filter(m =>
+        !(m.primary === snapshot.primary && m.secondary === snapshot.secondary)
+      );
+      saveSettings();
+      renderMergeSettingsList();
+      loadCurrentTab();
+    });
+    container.appendChild(row);
+  }
+}
+
+// Populate the drilldown merge picker list based on a search query.
+function renderMergePickerList(currentApp, query) {
+  const listEl = document.getElementById('dd-merge-list');
+  if (!listEl) return;
+
+  const q = query.toLowerCase().trim();
+  // IDs already secondary to this primary
+  const existingSecondaries = new Set(
+    (settings.appMerges || [])
+      .filter(m => m.primary === currentApp.app)
+      .map(m => m.secondary)
+  );
+
+  const candidates = cachedAllApps.filter(a => {
+    if (a.app === currentApp.app) return false;
+    if (existingSecondaries.has(a.app)) return false;
+    if (!q) return true;
+    return a.display_name.toLowerCase().includes(q) || a.app.toLowerCase().includes(q);
+  });
+
+  listEl.innerHTML = '';
+  if (candidates.length === 0) {
+    listEl.innerHTML =
+      '<div class="merge-picker-item" style="color:var(--text4);cursor:default">No apps found</div>';
+    return;
+  }
+
+  for (const candidate of candidates.slice(0, 20)) {
+    const item = document.createElement('div');
+    item.className = 'merge-picker-item';
+    const sub = candidate.display_name !== candidate.app ? candidate.app : '';
+    item.innerHTML =
+      `<div>${escHtml(candidate.display_name)}</div>` +
+      (sub ? `<div class="mpi-sub">${escHtml(sub)}</div>` : '');
+
+    item.addEventListener('click', () => {
+      const pickerInner = document.querySelector('#dd-merge-picker .merge-picker');
+      const confirmEl   = document.getElementById('dd-merge-confirm');
+      const confirmText = document.getElementById('dd-merge-confirm-text');
+
+      if (pickerInner) pickerInner.style.display = 'none';
+      confirmText.innerHTML =
+        `Merge <strong>${escHtml(candidate.display_name)}</strong> ` +
+        `into <strong>${escHtml(currentApp.display_name)}</strong>?`;
+      if (confirmEl) confirmEl.style.display = '';
+
+      document.getElementById('dd-merge-yes').onclick = () => {
+        if (!settings.appMerges) settings.appMerges = [];
+        settings.appMerges.push({
+          primary:       currentApp.app,
+          primaryName:   currentApp.display_name,
+          secondary:     candidate.app,
+          secondaryName: candidate.display_name,
+        });
+        saveSettings();
+        // Reset picker state for next open
+        document.getElementById('dd-merge-picker').style.display = 'none';
+        if (confirmEl) confirmEl.style.display = 'none';
+        if (pickerInner) pickerInner.style.display = '';
+        closeDrilldown();
+        loadCurrentTab();
+      };
+    });
+    listEl.appendChild(item);
+  }
+}
+
 // ── App drill-down modal ──────────────────────────────────────────────────────
 
 function closeDrilldown() {
@@ -1205,38 +1349,190 @@ function closeDrilldown() {
   destroyChart('dd');
 }
 
-async function showAppDrilldown(app, from, to) {
-  const modal    = document.getElementById('drilldown-modal');
-  const titleEl  = document.getElementById('drilldown-title');
-  const subEl    = document.getElementById('drilldown-subtitle');
-  const loadEl   = document.getElementById('drilldown-loading');
-  const nodataEl = document.getElementById('drilldown-nodata');
-  const wrapEl   = document.getElementById('drilldown-wrap');
-
-  titleEl.textContent = app.display_name;
-  subEl.textContent   = app.app !== app.display_name ? app.app : '';
-  loadEl.style.display   = '';
-  nodataEl.style.display = 'none';
-  wrapEl.style.display   = 'none';
-  modal.style.display    = 'flex';
+// Render (or re-render) the drilldown chart using the module-level ddChartRows / ddLabelFn.
+// Called both on initial load and when the chart type toggle changes.
+function renderDrilldownChart() {
+  if (!ddChartRows.length || !ddLabelFn) return;
   destroyChart('dd');
 
+  const wrapEl  = document.getElementById('drilldown-wrap');
+  wrapEl.style.display = '';
+
+  const isLine      = settings.chartStyleDrilldown === 'line';
+  const dark        = document.documentElement.getAttribute('data-theme') === 'dark';
+  const singleColor = dark ? '#e5e5e5' : '#1d1d1f';
+  const stackBars   = !isLine;
+  const maxVal      = Math.max(...ddChartRows.map(d => d.total / 60), 1);
+
+  let datasets;
+  if (isLine) {
+    const visDevs = visibleDevices();
+    datasets = state.devices.map((dev, i) => {
+      const typeIdx = state.devices.slice(0, i).filter(d => d.device_type === dev.device_type).length;
+      const color   = getDeviceColor(dev.device_type, typeIdx);
+      const data    = ddChartRows.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60));
+      return { ...lineDs(dev.display_name, data, color, visDevs.length === 1), hidden: state.hiddenDevices.has(dev.device_id) };
+    });
+  } else {
+    datasets = deviceDatasets(dev =>
+      ddChartRows.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60))
+    );
+  }
+
+  charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
+    type: isLine ? 'line' : 'bar',
+    data: { labels: ddChartRows.map(ddLabelFn), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: state.devices.length > 1, position: 'top',
+          labels: { boxWidth: 10, font: { size: 11 }, ...(isLine ? { usePointStyle: true, pointStyle: 'line' } : {}) },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+            footer: !isLine ? items => items.length > 1
+              ? [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`]
+              : [] : undefined,
+          },
+        },
+      },
+      scales: {
+        x: { stacked: stackBars, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: {
+          stacked: stackBars,
+          ticks: { stepSize: niceStepMin(maxVal), callback: v => fmtHours(v * 60) },
+          grid: { color: getChartGrid() },
+        },
+      },
+    },
+  });
+}
+
+async function showAppDrilldown(app, from, to) {
+  const modal      = document.getElementById('drilldown-modal');
+  const titleEl    = document.getElementById('drilldown-title');
+  const subEl      = document.getElementById('drilldown-subtitle');
+  const loadEl     = document.getElementById('drilldown-loading');
+  const nodataEl   = document.getElementById('drilldown-nodata');
+  const wrapEl     = document.getElementById('drilldown-wrap');
+  const pickerEl   = document.getElementById('dd-merge-picker');
+  const confirmEl  = document.getElementById('dd-merge-confirm');
+  const pickerInner = pickerEl ? pickerEl.querySelector('.merge-picker') : null;
+
+  // Reset drilldown state
+  ddChartRows = [];
+  ddLabelFn   = null;
+
+  // Title and subtitle
+  titleEl.textContent = app.display_name;
+  let subText = app.app !== app.display_name ? app.app : '';
+  if (app.mergedFrom && app.mergedFrom.length > 0) {
+    const mergedNames = app.mergedFrom.map(id => {
+      const found = cachedAllApps.find(a => a.app === id);
+      return escHtml(found ? found.display_name : id);
+    }).join(', ');
+    subText = (subText ? subText + ' · ' : '') + `Merged with: ${mergedNames}`;
+  }
+  subEl.textContent = subText;
+
+  // Reset UI
+  loadEl.style.display    = '';
+  nodataEl.style.display  = 'none';
+  wrapEl.style.display    = 'none';
+  if (pickerEl)    pickerEl.style.display    = 'none';
+  if (confirmEl)   confirmEl.style.display   = 'none';
+  if (pickerInner) pickerInner.style.display = '';
+  modal.style.display = 'flex';
+  destroyChart('dd');
+
+  // ── Chart type toggle (Bar / Line) ─────────────────────────────────────────
+  const ddTypeGroup = document.getElementById('dd-chart-type');
+  ddTypeGroup.querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === settings.chartStyleDrilldown);
+  });
+  ddTypeGroup.onclick = (e) => {
+    const btn = e.target.closest('.chart-type-btn');
+    if (!btn) return;
+    const type = btn.dataset.type;
+    if (type === settings.chartStyleDrilldown) return;
+    settings.chartStyleDrilldown = type;
+    saveSettings();
+    ddTypeGroup.querySelectorAll('.chart-type-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.type === type)
+    );
+    renderDrilldownChart();
+  };
+
+  // ── Rename button ──────────────────────────────────────────────────────────
+  document.getElementById('dd-rename-btn').onclick = (e) => {
+    showRenamePopover(app, e.clientX, e.clientY);
+  };
+
+  // ── Merge with… button ────────────────────────────────────────────────────
+  document.getElementById('dd-merge-btn').onclick = () => {
+    if (!pickerEl) return;
+    const isVisible = pickerEl.style.display !== 'none';
+    pickerEl.style.display = isVisible ? 'none' : '';
+    if (confirmEl)   confirmEl.style.display   = 'none';
+    if (pickerInner) pickerInner.style.display = '';
+    if (!isVisible) {
+      document.getElementById('dd-merge-search').value = '';
+      renderMergePickerList(app, '');
+      document.getElementById('dd-merge-search').focus();
+    }
+  };
+
+  // ── Merge search field ─────────────────────────────────────────────────────
+  document.getElementById('dd-merge-search').oninput = (e) => {
+    renderMergePickerList(app, e.target.value);
+  };
+
+  // ── Merge confirm — Cancel button ─────────────────────────────────────────
+  document.getElementById('dd-merge-no').onclick = () => {
+    if (confirmEl)   confirmEl.style.display   = 'none';
+    if (pickerInner) pickerInner.style.display = '';
+  };
+
+  // ── Fetch data ─────────────────────────────────────────────────────────────
   try {
-    const { days } = await window.api.getAppDaily(app.app, from, to);
+    const appIds = [app.app, ...(app.mergedFrom || [])];
+    let allDays;
+
+    if (appIds.length === 1) {
+      const { days } = await window.api.getAppDaily(appIds[0], from, to);
+      allDays = days || [];
+    } else {
+      // Fetch multiple app IDs and combine by date
+      const results = await Promise.all(appIds.map(id => window.api.getAppDaily(id, from, to)));
+      const dayMap  = {};
+      for (const { days } of results) {
+        for (const d of days || []) {
+          if (!dayMap[d.date]) dayMap[d.date] = { date: d.date, total: 0, by_device: {} };
+          dayMap[d.date].total += d.total;
+          for (const [devId, secs] of Object.entries(d.by_device || {})) {
+            dayMap[d.date].by_device[devId] = (dayMap[d.date].by_device[devId] || 0) + secs;
+          }
+        }
+      }
+      allDays = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
+    }
+
     loadEl.style.display = 'none';
 
-    if (!days || !days.length || days.every(d => d.total === 0)) {
+    if (!allDays.length || allDays.every(d => d.total === 0)) {
       nodataEl.style.display = '';
       return;
     }
 
-    // In year view aggregate individual days into months for readability
-    let chartRows = days;
+    // In year view, aggregate days into months for readability
+    let chartRows = allDays;
     let labelFn   = d => fmtDate(d.date);
     if (state.mode === 'year') {
       const byMonth = {};
-      for (const d of days) {
-        const key = d.date.slice(0, 7); // "YYYY-MM"
+      for (const d of allDays) {
+        const key = d.date.slice(0, 7); // 'YYYY-MM'
         if (!byMonth[key]) byMonth[key] = { date: key, total: 0, by_device: {} };
         byMonth[key].total += d.total;
         for (const [id, secs] of Object.entries(d.by_device || {})) {
@@ -1250,47 +1546,14 @@ async function showAppDrilldown(app, from, to) {
       };
     }
 
-    wrapEl.style.display = '';
-    const grid     = getChartGrid();
-    const datasets = deviceDatasets(dev =>
-      chartRows.map(d => Math.round((d.by_device[dev.device_id] || 0) / 60))
-    );
+    // Store for re-rendering on chart type toggle
+    ddChartRows = chartRows;
+    ddLabelFn   = labelFn;
 
-    charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
-      type: 'bar',
-      data: {
-        labels:   chartRows.map(labelFn),
-        datasets,
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: state.devices.length > 1, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
-          tooltip: {
-            callbacks: {
-              label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
-              footer: items => items.length > 1
-                ? [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`]
-                : [],
-            },
-          },
-        },
-        scales: {
-          x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-          y: {
-            stacked: true,
-            ticks: {
-              stepSize: niceStepMin(Math.max(...chartRows.map(d => d.total / 60))),
-              callback: v => fmtHours(v * 60),
-            },
-            grid: { color: grid },
-          },
-        },
-      },
-    });
+    renderDrilldownChart();
   } catch (e) {
-    loadEl.style.display = 'none';
-    nodataEl.style.display = '';
+    loadEl.style.display    = 'none';
+    nodataEl.style.display  = '';
     console.error('Drilldown error:', e);
   }
 }
@@ -1512,6 +1775,9 @@ async function openSettings() {
 
   // Load device list
   renderDeviceSettingsList();
+
+  // Load app merges list
+  renderMergeSettingsList();
 
   // Load collection history
   document.getElementById('logs-loading').style.display = '';
