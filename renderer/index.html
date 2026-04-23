@@ -14,6 +14,8 @@
   <title>Screenlog</title>
   <!-- Chart.js is bundled locally — never loaded from a CDN -->
   <script src="chart.umd.js"></script>
+  <!-- Treemap plugin — must load after Chart.js, before app.js -->
+  <script src="chartjs-chart-treemap.min.js"></script>
   <!-- Tauri API bridge — must load before app.js -->
   <script src="api.js"></script>
   <style>
@@ -636,7 +638,14 @@
     </div>
 
     <div class="chart-card">
-      <div class="card-title">Top Apps</div>
+      <div class="card-title-row">
+        <div class="card-title">Top Apps</div>
+        <div class="chart-type-toggle" id="ov-chart-type">
+          <button class="chart-type-btn active" data-type="bar">Bar</button>
+          <button class="chart-type-btn" data-type="doughnut">Donut</button>
+          <button class="chart-type-btn" data-type="treemap">Treemap</button>
+        </div>
+      </div>
       <div id="ov-loading" class="loading">Loading…</div>
       <div id="ov-nodata" class="no-data" style="display:none">No data for this period.</div>
       <div class="chart-wrap" id="ov-wrap" style="display:none"><canvas id="ov-chart"></canvas></div>

@@ -3,11 +3,14 @@
   "version": "1.0.0",
   "description": "macOS Screen Time dashboard in your menu bar",
   "scripts": {
-    "dev":   "tauri dev",
+    "dev": "tauri dev",
     "build": "tauri build",
-    "icon":  "tauri icon assets/screentime_app.png"
+    "icon": "tauri icon assets/screentime_app.png"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "chartjs-chart-treemap": "^3.1.0"
   }
 }

@@ -18,8 +18,16 @@ const settings = {
   appearance:             'system',  // 'system' | 'light' | 'dark'
   notificationsEnabled:   false,
   deduplicateDeviceTime:  false,
-  chartStyle:             'bar',     // 'bar' | 'line'
+  chartStyle:             'bar',     // 'bar' | 'line'  — Daily & Hourly
+  chartStyleOverview:     'bar',     // 'bar' | 'doughnut' | 'treemap'
 };
+
+// Categorical palette for donut/treemap — Apple system colours, all dark enough for white text
+const OV_PALETTE = [
+  '#007AFF', '#FF9500', '#FF2D55', '#AF52DE', '#00C7BE',
+  '#34C759', '#5856D6', '#FF6B35', '#FFCC00', '#32ADE6',
+  '#30D158', '#FF3B30', '#BF5AF2', '#FF9F0A', '#0A84FF',
+];
 
 const charts = {};
 
@@ -280,10 +288,19 @@ function renderDeviceBreakdown(elId, byDeviceTotals) {
   el.style.display = '';
 }
 
-// Reflect settings.chartStyle into both toggle groups.
+// Reflect settings.chartStyle into the Daily/Hourly toggle groups.
 function syncChartTypeToggles() {
-  document.querySelectorAll('.chart-type-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.type === settings.chartStyle);
+  ['dy-chart-type', 'hr-chart-type'].forEach(id => {
+    document.getElementById(id)?.querySelectorAll('.chart-type-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.type === settings.chartStyle);
+    });
+  });
+}
+
+// Reflect settings.chartStyleOverview into the Overview toggle.
+function syncOverviewToggle() {
+  document.getElementById('ov-chart-type')?.querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === settings.chartStyleOverview);
   });
 }
 
@@ -449,75 +466,177 @@ async function loadOverview() {
   showTabState('ov', 'data');
   destroyChart('ov');
 
-  const dedup = settings.deduplicateDeviceTime;
-  const dark  = document.documentElement.getAttribute('data-theme') === 'dark';
+  const dedup   = settings.deduplicateDeviceTime;
+  const dark    = document.documentElement.getAttribute('data-theme') === 'dark';
+  const ovStyle = settings.chartStyleOverview;   // 'bar' | 'doughnut' | 'treemap'
+  const canvas  = document.getElementById('ov-chart');
+  canvas.ondblclick = null;
 
-  const ovDatasets = dedup
-    ? [{
-        label: 'Screen time',
-        data:  filtered.map(a => Math.round(
-          Object.values(a.by_device).reduce((s, v) => s + v, 0) / 60
-        )),
-        backgroundColor: dark ? '#e5e5e5' : '#1d1d1f',
-      }]
-    : deviceDatasets(dev => filtered.map(a => Math.round((a.by_device[dev.device_id] || 0) / 60)));
+  // ── Bar chart ─────────────────────────────────────────────────────────────────
+  if (ovStyle === 'bar') {
+    const ovDatasets = dedup
+      ? [{ label: 'Screen time', data: filtered.map(a => Math.round(Object.values(a.by_device).reduce((s, v) => s + v, 0) / 60)), backgroundColor: dark ? '#e5e5e5' : '#1d1d1f' }]
+      : deviceDatasets(dev => filtered.map(a => Math.round((a.by_device[dev.device_id] || 0) / 60)));
 
-  const canvas = document.getElementById('ov-chart');
-  canvas.style.height = `${Math.max(280, filtered.length * 28)}px`;
-  canvas.title = 'Click any row to see history; double-click to rename';
+    canvas.style.height = `${Math.max(280, filtered.length * 28)}px`;
+    canvas.title = 'Click any row to see history; double-click to rename';
 
-  charts['ov'] = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: filtered.map(a => a.display_name),
-      datasets: ovDatasets,
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: !dedup && state.devices.length > 1,
-          position: 'top',
-          labels: { boxWidth: 10, font: { size: 11 } },
-        },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const item = filtered[items[0].dataIndex];
-              return item.display_name === item.app ? item.app : `${item.display_name} (${item.app})`;
+    charts['ov'] = new Chart(canvas, {
+      type: 'bar',
+      data: { labels: filtered.map(a => a.display_name), datasets: ovDatasets },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: !dedup && state.devices.length > 1, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              title: items => { const a = filtered[items[0].dataIndex]; return a.display_name === a.app ? a.app : `${a.display_name} (${a.app})`; },
+              label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
             },
-            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+          },
+        },
+        scales: {
+          x: { stacked: !dedup, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+          y: { stacked: !dedup, ticks: { font: { size: 12 } } },
+        },
+      },
+    });
+
+    charts['ov'].options.onClick = (event, elements) => {
+      if (!elements.length) return;
+      clearTimeout(drilldownClickTimer);
+      const idx = elements[0].index;
+      drilldownClickTimer = setTimeout(() => showAppDrilldown(filtered[idx], from, to), 220);
+    };
+
+    canvas.ondblclick = (e) => {
+      clearTimeout(drilldownClickTimer);
+      const chart = charts['ov'];
+      if (!chart) return;
+      const index = Math.round(chart.scales.y.getValueForPixel(e.offsetY));
+      if (index < 0 || index >= filtered.length) return;
+      showRenamePopover(filtered[index], e.clientX, e.clientY);
+    };
+
+  // ── Donut chart ───────────────────────────────────────────────────────────────
+  } else if (ovStyle === 'doughnut') {
+    canvas.style.height = '360px';
+    canvas.title = 'Click any slice to see history';
+
+    charts['ov'] = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: filtered.map(a => a.display_name),
+        datasets: [{
+          data: filtered.map(a => Math.round(rowTotal(a) / 60)),
+          backgroundColor: filtered.map((_, i) => OV_PALETTE[i % OV_PALETTE.length]),
+          borderWidth: 2,
+          borderColor: dark ? '#2c2c2e' : '#ffffff',
+          hoverOffset: 8,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '62%',
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { boxWidth: 10, font: { size: 11 }, padding: 10,
+              generateLabels: chart => {
+                const ds = chart.data.datasets[0];
+                return chart.data.labels.map((label, i) => ({
+                  text:            label,
+                  fillStyle:       ds.backgroundColor[i],
+                  strokeStyle:     ds.backgroundColor[i],
+                  lineWidth:       0,
+                  hidden:          false,
+                  index:           i,
+                }));
+              },
+            },
+          },
+          tooltip: {
+            callbacks: {
+              title: items => { const a = filtered[items[0].dataIndex]; return a.display_name === a.app ? a.app : `${a.display_name} (${a.app})`; },
+              label: ctx => ` ${fmtHours(ctx.raw * 60)} — ${Math.round(ctx.raw / filtered.reduce((s, a) => s + rowTotal(a) / 60, 0) * 100)}%`,
+            },
           },
         },
       },
-      scales: {
-        x: { stacked: !dedup, ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
-        y: { stacked: !dedup, ticks: { font: { size: 12 } } },
+    });
+
+    charts['ov'].options.onClick = (event, elements) => {
+      if (!elements.length) return;
+      clearTimeout(drilldownClickTimer);
+      const idx = elements[0].index;
+      drilldownClickTimer = setTimeout(() => showAppDrilldown(filtered[idx], from, to), 220);
+    };
+
+  // ── Treemap ───────────────────────────────────────────────────────────────────
+  } else if (ovStyle === 'treemap') {
+    canvas.style.height = '380px';
+    canvas.title = 'Click any cell to see history';
+
+    const treeData = filtered.map((a, i) => ({
+      v:     Math.round(rowTotal(a) / 60),
+      label: a.display_name,
+      app:   a.app,
+      idx:   i,
+    }));
+
+    charts['ov'] = new Chart(canvas, {
+      type: 'treemap',
+      data: {
+        datasets: [{
+          tree:  treeData,
+          key:   'v',
+          backgroundColor: ctx => {
+            if (!ctx.raw?._data) return OV_PALETTE[0];
+            return OV_PALETTE[ctx.raw._data.idx % OV_PALETTE.length];
+          },
+          borderWidth: 2,
+          borderColor: dark ? '#1c1c1e' : '#f5f5f7',
+          spacing: 1,
+          labels: {
+            display: true,
+            overflow: 'cut',
+            padding: 5,
+            color: '#ffffff',
+            font: [{ size: 12, weight: '600' }, { size: 11, weight: '400' }],
+            formatter: ctx => {
+              if (!ctx.raw?._data) return '';
+              return [ctx.raw._data.label, fmtHours(ctx.raw.v * 60)];
+            },
+          },
+          captions: { display: false },
+        }],
       },
-    },
-  });
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: items => { const d = items[0].raw._data; return d.display_name === d.app ? d.app : `${d.label}${d.label !== d.app ? ` (${d.app})` : ''}`; },
+              label: ctx => ` ${fmtHours(ctx.raw.v * 60)}`,
+            },
+          },
+        },
+      },
+    });
 
-  // Single click → drill-down (with delay to allow double-click detection)
-  charts['ov'].options.onClick = (event, elements) => {
-    if (!elements.length) return;
-    clearTimeout(drilldownClickTimer);
-    const idx = elements[0].index;
-    drilldownClickTimer = setTimeout(() => {
-      showAppDrilldown(filtered[idx], from, to);
-    }, 220);
-  };
-
-  // Double-click → rename (cancels pending drill-down)
-  canvas.ondblclick = (e) => {
-    clearTimeout(drilldownClickTimer);
-    const chart = charts['ov'];
-    if (!chart) return;
-    const index = Math.round(chart.scales.y.getValueForPixel(e.offsetY));
-    if (index < 0 || index >= filtered.length) return;
-    showRenamePopover(filtered[index], e.clientX, e.clientY);
-  };
+    charts['ov'].options.onClick = (event, elements) => {
+      if (!elements.length) return;
+      clearTimeout(drilldownClickTimer);
+      const d = elements[0].element.$context.raw._data;
+      if (d?.idx == null) return;
+      drilldownClickTimer = setTimeout(() => showAppDrilldown(filtered[d.idx], from, to), 220);
+    };
+  }
 }
 
 // ── Daily ─────────────────────────────────────────────────────────────────────
@@ -1397,6 +1516,7 @@ async function init() {
   const dedupToggleEl = document.getElementById('dedup-toggle');
   if (dedupToggleEl) dedupToggleEl.checked = settings.deduplicateDeviceTime;
   syncChartTypeToggles();
+  syncOverviewToggle();
 
   window.api.onCollectProgress(async () => {
     await refreshLastRun();
@@ -1554,7 +1674,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCurrentTab();
   });
 
-  // Chart type toggles (Bar / Line) — shared setting, applies to Daily + Hourly
+  // Chart type toggles (Bar / Line) — Daily + Hourly
   ['dy-chart-type', 'hr-chart-type'].forEach(groupId => {
     document.getElementById(groupId).addEventListener('click', (e) => {
       const btn = e.target.closest('.chart-type-btn');
@@ -1566,6 +1686,18 @@ document.addEventListener('DOMContentLoaded', () => {
       syncChartTypeToggles();
       loadCurrentTab();
     });
+  });
+
+  // Chart type toggle — Overview (Bar / Donut / Treemap)
+  document.getElementById('ov-chart-type').addEventListener('click', (e) => {
+    const btn = e.target.closest('.chart-type-btn');
+    if (!btn) return;
+    const type = btn.dataset.type;
+    if (type === settings.chartStyleOverview) return;
+    settings.chartStyleOverview = type;
+    saveSettings();
+    syncOverviewToggle();
+    loadCurrentTab();
   });
 
   // CSV export
