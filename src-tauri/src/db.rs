@@ -263,8 +263,11 @@ pub fn get_daily(conn: &Connection, from: i64, to: i64) -> SqlResult<DailyResult
             .as_secs() as i64,
     );
 
-    // Iterate day by day from `from` to `end_ts`
-    let mut cursor = from - (from % 86400); // floor to day boundary (UTC approx)
+    // Iterate day by day from `from` to `end_ts`.
+    // The frontend always passes `from` as local midnight, so we start there directly.
+    // Flooring to UTC midnight (from % 86400) was wrong for non-UTC timezones and
+    // produced a spurious empty day at the start of every period.
+    let mut cursor = from;
     while cursor <= end_ts {
         let iso = unix_to_date_local(cursor);
         days.insert(iso.clone(), DayRow { date: iso, by_device: HashMap::new(), dedup_total: 0 });

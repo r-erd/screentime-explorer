@@ -1135,7 +1135,10 @@ function showRenamePopover(item, clientX, clientY) {
     popover.style.display = 'none';
     if (name === item.display_name) return;
     await window.api.updateAppName(item.app, name);
-    loadOverview();
+    // Await overview so cachedAllApps is fresh, then refresh the merge list
+    // (no-op if Settings modal isn't open).
+    await loadOverview();
+    renderMergeSettingsList();
   }
 
   function cancel() {
@@ -1255,13 +1258,19 @@ function renderMergeSettingsList() {
   container.innerHTML = '';
 
   for (const merge of merges) {
+    // Look up current display names from live app cache so renames are reflected.
+    const primaryApp    = cachedAllApps.find(a => a.app === merge.primary);
+    const secondaryApp  = cachedAllApps.find(a => a.app === merge.secondary);
+    const primaryName   = primaryApp   ? primaryApp.display_name   : (merge.primaryName   || merge.primary);
+    const secondaryName = secondaryApp ? secondaryApp.display_name : (merge.secondaryName || merge.secondary);
+
     const row = document.createElement('div');
     row.className = 'merge-list-row';
     row.innerHTML =
       `<div class="merge-list-names">` +
-        `<strong>${escHtml(merge.primaryName || merge.primary)}</strong>` +
+        `<strong>${escHtml(primaryName)}</strong>` +
         `<span class="mlr-arrow"> ← </span>` +
-        `${escHtml(merge.secondaryName || merge.secondary)}` +
+        `${escHtml(secondaryName)}` +
       `</div>` +
       `<button class="target-clear-btn">Remove</button>`;
     const btn      = row.querySelector('button');
@@ -1284,16 +1293,13 @@ function renderMergePickerList(currentApp, query) {
   if (!listEl) return;
 
   const q = query.toLowerCase().trim();
-  // IDs already secondary to this primary
-  const existingSecondaries = new Set(
-    (settings.appMerges || [])
-      .filter(m => m.primary === currentApp.app)
-      .map(m => m.secondary)
-  );
+  // Exclude any app already used as a secondary in ANY merge — allowing the same
+  // secondary under multiple primaries would cause applyMerges() to double-count its data.
+  const allSecondaries = new Set((settings.appMerges || []).map(m => m.secondary));
 
   const candidates = cachedAllApps.filter(a => {
     if (a.app === currentApp.app) return false;
-    if (existingSecondaries.has(a.app)) return false;
+    if (allSecondaries.has(a.app)) return false;
     if (!q) return true;
     return a.display_name.toLowerCase().includes(q) || a.app.toLowerCase().includes(q);
   });
@@ -1587,6 +1593,18 @@ async function exportCsv() {
         state.devices.map(dev => Math.round((d.by_device[dev.device_id] || 0) / 60)).join(',')
       ).join('\n');
     filename = `screenlog_daily_${ts}.csv`;
+  } else if (state.activeTab === 'monthly') {
+    // Aggregate daily data into month buckets (mirrors loadMonthly() logic)
+    const { days } = await window.api.getDaily(from, to);
+    const monthMap = new Map();
+    for (const d of days) {
+      const key = d.date.slice(0, 7); // 'YYYY-MM'
+      if (!monthMap.has(key)) monthMap.set(key, { key, totalSecs: 0 });
+      monthMap.get(key).totalSecs += rowTotal(d);
+    }
+    csv = 'Month,Total Minutes\n' +
+      [...monthMap.values()].map(m => `${m.key},${Math.round(m.totalSecs / 60)}`).join('\n');
+    filename = `screenlog_monthly_${ts}.csv`;
   } else {
     const { hours, num_days } = await window.api.getHourly(from, to);
     csv = 'Hour,Avg Minutes\n' +
