@@ -1942,8 +1942,14 @@ async function init() {
 
 // ── Custom range picker ───────────────────────────────────────────────────────
 
+// Returns 'YYYY-MM-DD' in local time (toISOString() is always UTC and can be
+// one day off for users east of UTC between midnight and their UTC offset).
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function initCustomPicker() {
-  const today     = new Date().toISOString().slice(0, 10);
+  const today     = localDateStr();
   const fromInput = document.getElementById('custom-from-input');
   const toInput   = document.getElementById('custom-to-input');
 
