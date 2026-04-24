@@ -262,3 +262,7 @@ Collection runs on startup, every hour, and on every wake from sleep.
 ## Privacy
 
 All data stays on your Mac by default. Nothing is sent anywhere unless you explicitly configure and trigger the optional **Grafana Push** feature, which sends data only to the PostgreSQL server you specify.
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
