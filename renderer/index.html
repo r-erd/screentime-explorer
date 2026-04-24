@@ -128,12 +128,13 @@
     }
     /* All interactive elements inside the drag region must opt out */
     header button, header input, header .mode-group, header .period-nav,
-    header .collect-wrap, header .merge-wrap {
+    header .collect-wrap, header .merge-wrap, header .custom-range-picker {
       -webkit-app-region: no-drag;
     }
     header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
 
-    .mode-group, .period-nav, .collect-wrap, .device-filters, .merge-wrap {
+    .mode-group, .period-nav, .collect-wrap, .device-filters, .merge-wrap,
+    .custom-range-picker {
       -webkit-app-region: no-drag;
     }
 
@@ -570,6 +571,30 @@
     .merge-list-names strong { color: var(--text); font-weight: 600; }
     .merge-list-names .mlr-arrow { color: var(--text4); margin: 0 4px; }
 
+    /* ── Custom range picker ── */
+    .custom-range-picker {
+      display: flex; align-items: center; gap: 5px;
+    }
+    .custom-date-input {
+      font-size: 12px; font-family: inherit;
+      padding: 4px 7px;
+      border: 1px solid var(--border-ctrl); border-radius: 7px;
+      outline: none; background: var(--surface); color: var(--text);
+      cursor: pointer; width: 118px;
+    }
+    .custom-date-input:focus { border-color: var(--text3); }
+    .custom-date-input::-webkit-calendar-picker-indicator { opacity: 0.5; cursor: pointer; }
+    .custom-range-sep {
+      font-size: 12px; color: var(--text4); flex-shrink: 0;
+    }
+    .custom-apply-btn {
+      font-family: inherit; font-size: 12px; font-weight: 600;
+      padding: 4px 11px; border: none; border-radius: 7px;
+      background: var(--text); color: var(--surface);
+      cursor: pointer; white-space: nowrap; transition: opacity 0.12s;
+    }
+    .custom-apply-btn:hover { opacity: 0.82; }
+
     /* ── Responsive header: stage 1 — hide h1 + merge label, tighten gaps ── */
     @media (max-width: 860px) {
       header { gap: 10px; padding-right: 16px; }
@@ -620,6 +645,15 @@
     <button class="mode-btn active" data-mode="week">Week</button>
     <button class="mode-btn" data-mode="month">Month</button>
     <button class="mode-btn" data-mode="year">Year</button>
+    <button class="mode-btn" data-mode="custom">Custom</button>
+  </div>
+
+  <!-- Custom date range picker — shown instead of period-nav when Custom is active -->
+  <div class="custom-range-picker" id="custom-range-picker" style="display:none">
+    <input type="date" id="custom-from-input" class="custom-date-input">
+    <span class="custom-range-sep">→</span>
+    <input type="date" id="custom-to-input" class="custom-date-input">
+    <button id="custom-apply-btn" class="custom-apply-btn">Apply</button>
   </div>
 
   <div class="period-nav">

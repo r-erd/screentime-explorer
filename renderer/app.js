@@ -5,11 +5,13 @@
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const state = {
-  mode:          'week',  // day | week | month | year
+  mode:          'week',  // day | week | month | year | custom
   offset:        0,       // 0 = current period, -1 = previous, etc.
   activeTab:     'overview',
   devices:       [],      // [{device_id, device_type, display_name}], set by refreshDevices()
   hiddenDevices: new Set(), // device_ids currently hidden by the user
+  customFrom:    null,    // ISO date string 'YYYY-MM-DD', used when mode === 'custom'
+  customTo:      null,    // ISO date string 'YYYY-MM-DD', used when mode === 'custom'
 };
 
 const settings = {
@@ -183,10 +185,18 @@ function getPeriodBounds(mode, offset) {
     from = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0);
     to   = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
 
-  } else { // year
+  } else if (mode === 'year') {
     const year = now.getFullYear() + offset;
     from = new Date(year, 0, 1, 0, 0, 0);
     to   = new Date(year, 11, 31, 23, 59, 59);
+
+  } else { // custom
+    const fd = state.customFrom || now.toISOString().slice(0, 10);
+    const td = state.customTo   || now.toISOString().slice(0, 10);
+    const [fy, fm, fdd] = fd.split('-').map(Number);
+    const [ty, tm, tdd] = td.split('-').map(Number);
+    from = new Date(fy, fm - 1, fdd, 0, 0, 0);
+    to   = new Date(ty, tm - 1, tdd, 23, 59, 59);
   }
 
   return [Math.floor(from.getTime() / 1000), Math.floor(to.getTime() / 1000)];
@@ -406,6 +416,7 @@ function renderDevicePills() {
 // ── UI updates ────────────────────────────────────────────────────────────────
 
 function updatePeriodUI() {
+  if (state.mode === 'custom') return; // period-nav is hidden in custom mode
   const { label, year } = getPeriodLabel(state.mode, state.offset);
   const periodLabelEl = document.getElementById('period-label');
   const periodYearEl  = document.getElementById('period-year');
@@ -424,7 +435,15 @@ function updateModeButtons() {
     btn.classList.toggle('active', btn.dataset.mode === state.mode);
   });
 
-  // Hide "Daily" tab in Day mode; show "Monthly" tab only in Year mode
+  const isCustom = state.mode === 'custom';
+
+  // Swap period-nav ↔ custom-range-picker depending on mode
+  const periodNav   = document.querySelector('.period-nav');
+  const customPicker = document.getElementById('custom-range-picker');
+  if (periodNav)    periodNav.style.display    = isCustom ? 'none' : '';
+  if (customPicker) customPicker.style.display = isCustom ? ''     : 'none';
+
+  // Hide "Daily" tab in Day mode; "Monthly" tab only in Year mode
   const dailyTabBtn   = document.querySelector('.tab-btn[data-tab="daily"]');
   const monthlyTabBtn = document.querySelector('.tab-btn[data-tab="monthly"]');
   if (dailyTabBtn)   dailyTabBtn.style.display   = (state.mode === 'day')  ? 'none' : '';
@@ -1921,6 +1940,51 @@ async function init() {
   loadCurrentTab();
 }
 
+// ── Custom range picker ───────────────────────────────────────────────────────
+
+function initCustomPicker() {
+  const today     = new Date().toISOString().slice(0, 10);
+  const fromInput = document.getElementById('custom-from-input');
+  const toInput   = document.getElementById('custom-to-input');
+
+  // Default: start of current month → today (first time only)
+  if (!state.customFrom) {
+    const now = new Date();
+    state.customFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  }
+  if (!state.customTo) {
+    state.customTo = today;
+  }
+
+  fromInput.value = state.customFrom;
+  toInput.value   = state.customTo;
+  fromInput.max   = state.customTo;
+  toInput.min     = state.customFrom;
+  toInput.max     = today;
+}
+
+function applyCustomRange() {
+  const fromInput = document.getElementById('custom-from-input');
+  const toInput   = document.getElementById('custom-to-input');
+  const from = fromInput.value;
+  const to   = toInput.value;
+
+  if (!from || !to || from > to) {
+    // Flash the border red to indicate the problem
+    const bad = from > to ? toInput : (!from ? fromInput : toInput);
+    bad.style.borderColor = '#FF3B30';
+    setTimeout(() => { bad.style.borderColor = ''; }, 1500);
+    return;
+  }
+
+  state.customFrom = from;
+  state.customTo   = to;
+
+  // Monthly tab is only meaningful for year mode — redirect if needed
+  if (state.activeTab === 'monthly') switchTab('overview');
+  else loadCurrentTab();
+}
+
 // ── Event wiring ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1932,7 +1996,21 @@ document.addEventListener('DOMContentLoaded', () => {
   // Mode buttons
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      state.mode   = btn.dataset.mode;
+      const newMode = btn.dataset.mode;
+
+      if (newMode === 'custom') {
+        state.mode = 'custom';
+        updateModeButtons();
+        initCustomPicker();
+        // If we already have a saved range, load immediately; otherwise wait for Apply
+        if (state.customFrom && state.customTo) {
+          if (state.activeTab === 'monthly') switchTab('overview');
+          else loadCurrentTab();
+        }
+        return;
+      }
+
+      state.mode   = newMode;
       state.offset = 0;
 
       const needsRedirect =
@@ -2099,6 +2177,27 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('drilldown-close').addEventListener('click', closeDrilldown);
   document.getElementById('drilldown-modal').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeDrilldown();
+  });
+
+  // Custom range picker
+  document.getElementById('custom-apply-btn').addEventListener('click', applyCustomRange);
+
+  const customFromInput = document.getElementById('custom-from-input');
+  const customToInput   = document.getElementById('custom-to-input');
+  // Keep min/max in sync so the native date picker prevents invalid ranges
+  customFromInput.addEventListener('change', () => {
+    customToInput.min = customFromInput.value;
+    // If to is now before from, clamp it
+    if (customToInput.value && customToInput.value < customFromInput.value) {
+      customToInput.value = customFromInput.value;
+    }
+  });
+  customToInput.addEventListener('change', () => {
+    customFromInput.max = customToInput.value;
+  });
+  // Apply on Enter from either date input
+  [customFromInput, customToInput].forEach(el => {
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyCustomRange(); });
   });
 
   // Set initial UI state
