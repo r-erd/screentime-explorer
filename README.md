@@ -9,12 +9,16 @@ Built with [Tauri v2](https://tauri.app) (Rust backend + system WKWebView). The 
 
 <table>
   <tr>
-    <td><img src="res/day-overview.png" alt="Day overview — top apps with per-device colours and goal KPIs" width="460"></td>
-    <td><img src="res/month-daily.png" alt="Month daily chart — usage per day with goal line and merge overlaps enabled" width="460"></td>
+    <td><img src="res/year-overview.png" alt="Year overview — treemap of top apps with KPI cards and multi-device breakdown" width="460"></td>
+    <td><img src="res/month-daily.png" alt="Month daily chart — usage per day with goal line and per-device stacked bars" width="460"></td>
   </tr>
   <tr>
-    <td><img src="res/week-hourly.png" alt="Week hourly chart — average usage by hour of day stacked by device" width="460"></td>
-    <td><img src="res/settings.png" alt="Settings modal — appearance, daily goal, notifications, and data management" width="460"></td>
+    <td><img src="res/custom-daily.png" alt="Custom date range — daily line chart with goal threshold and device filter pills" width="460"></td>
+    <td><img src="res/week-hourly.png" alt="Week hourly chart — average usage by hour of day per device" width="460"></td>
+  </tr>
+  <tr>
+    <td><img src="res/drilldown.png" alt="App drill-down — per-app daily history with rename, merge, and per-device lines" width="460"></td>
+    <td><img src="res/settings.png" alt="Settings — daily goal, notifications, data export, devices, and app merges" width="460"></td>
   </tr>
 </table>
 
