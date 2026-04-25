@@ -49,7 +49,8 @@
     },
 
     // ── Extended API ──────────────────────────────────────────────────────────
-    getAppDaily:      (appId, from, to) => inv('get_app_daily', { appId, from, to }),
+    getAppDaily:      (appId, from, to) => inv('get_app_daily',  { appId, from, to }),
+    getAppHourly:     (appId, from, to) => inv('get_app_hourly', { appId, from, to }),
     showNotification: (title, body)     => inv('show_notification', { title, body }),
     getAutostart:     ()                => inv('get_autostart', {}),
     setAutostart:     (enabled)         => inv('set_autostart', { enabled }),

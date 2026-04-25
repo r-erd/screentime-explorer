@@ -41,6 +41,10 @@ let cachedAllApps = [];
 // Drilldown state — stored so chart type toggle can re-render without re-fetching.
 let ddChartRows   = [];
 let ddLabelFn     = null;
+let ddGrouping    = 'day';   // 'hour' | 'day' | 'month' | 'year'
+let ddAppRef      = null;    // current app object being drilled into
+let ddFromTs      = 0;       // unix timestamps for the active drilldown range
+let ddToTs        = 0;
 
 // ── Settings persistence ──────────────────────────────────────────────────────
 
@@ -157,6 +161,14 @@ function fmtHour(h) {
   if (h < 12)   return `${h}am`;
   if (h === 12) return '12pm';
   return `${h - 12}pm`;
+}
+
+// Long form used in drilldown hourly tooltip titles: "12:00 AM", "1:00 PM" etc.
+function fmtHourOfDay(h) {
+  if (h === 0)  return '12:00 AM';
+  if (h < 12)   return `${h}:00 AM`;
+  if (h === 12) return '12:00 PM';
+  return `${h - 12}:00 PM`;
 }
 
 // ── Period bounds ─────────────────────────────────────────────────────────────
@@ -1386,11 +1398,9 @@ function renderDrilldownChart() {
   const wrapEl  = document.getElementById('drilldown-wrap');
   wrapEl.style.display = '';
 
-  const isLine      = settings.chartStyleDrilldown === 'line';
-  const dark        = document.documentElement.getAttribute('data-theme') === 'dark';
-  const singleColor = dark ? '#e5e5e5' : '#1d1d1f';
-  const stackBars   = !isLine;
-  const maxVal      = Math.max(...ddChartRows.map(d => d.total / 60), 1);
+  const isLine    = settings.chartStyleDrilldown === 'line';
+  const stackBars = !isLine;
+  const maxVal    = Math.max(...ddChartRows.map(d => d.total / 60), 1);
 
   let datasets;
   if (isLine) {
@@ -1407,6 +1417,9 @@ function renderDrilldownChart() {
     );
   }
 
+  // Hourly grouping: x-axis shows "12 AM", "1 PM" etc.
+  const isHourly = ddGrouping === 'hour';
+
   charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
     type: isLine ? 'line' : 'bar',
     data: { labels: ddChartRows.map(ddLabelFn), datasets },
@@ -1419,6 +1432,9 @@ function renderDrilldownChart() {
         },
         tooltip: {
           callbacks: {
+            title: isHourly
+              ? items => { const h = ddChartRows[items[0].dataIndex]?.hour ?? 0; return fmtHourOfDay(h); }
+              : undefined,
             label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
             footer: !isLine ? items => items.length > 1
               ? [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`]
@@ -1438,20 +1454,138 @@ function renderDrilldownChart() {
   });
 }
 
-async function showAppDrilldown(app, from, to) {
-  const modal      = document.getElementById('drilldown-modal');
-  const titleEl    = document.getElementById('drilldown-title');
-  const subEl      = document.getElementById('drilldown-subtitle');
-  const loadEl     = document.getElementById('drilldown-loading');
-  const nodataEl   = document.getElementById('drilldown-nodata');
-  const wrapEl     = document.getElementById('drilldown-wrap');
-  const pickerEl   = document.getElementById('dd-merge-picker');
-  const confirmEl  = document.getElementById('dd-merge-confirm');
-  const pickerInner = pickerEl ? pickerEl.querySelector('.merge-picker') : null;
+// ── Drilldown data fetch + render ─────────────────────────────────────────────
 
-  // Reset drilldown state
+async function fetchAndRenderDrilldown() {
+  const loadEl   = document.getElementById('drilldown-loading');
+  const nodataEl = document.getElementById('drilldown-nodata');
+  const wrapEl   = document.getElementById('drilldown-wrap');
+  const app      = ddAppRef;
+  if (!app) return;
+
   ddChartRows = [];
   ddLabelFn   = null;
+  loadEl.style.display   = '';
+  nodataEl.style.display = 'none';
+  wrapEl.style.display   = 'none';
+  destroyChart('dd');
+
+  const appIds = [app.app, ...(app.mergedFrom || [])];
+  const from   = ddFromTs;
+  const to     = ddToTs;
+
+  try {
+    if (ddGrouping === 'hour') {
+      // ── Hourly: average usage by hour of day ───────────────────────────────
+      let hours;
+      if (appIds.length === 1) {
+        const res = await window.api.getAppHourly(appIds[0], from, to);
+        hours = res.hours || [];
+      } else {
+        const results = await Promise.all(appIds.map(id => window.api.getAppHourly(id, from, to)));
+        hours = Array.from({ length: 24 }, (_, h) => ({ hour: h, total: 0, by_device: {} }));
+        for (const { hours: hrs } of results) {
+          for (const hr of (hrs || [])) {
+            hours[hr.hour].total += hr.total;
+            for (const [devId, secs] of Object.entries(hr.by_device || {})) {
+              hours[hr.hour].by_device[devId] = (hours[hr.hour].by_device[devId] || 0) + secs;
+            }
+          }
+        }
+      }
+
+      loadEl.style.display = 'none';
+      if (hours.every(h => h.total === 0)) { nodataEl.style.display = ''; return; }
+
+      ddChartRows = hours;
+      ddLabelFn   = h => fmtHourOfDay(h.hour);
+
+    } else {
+      // ── Day / Month / Year: fetch daily data, aggregate in JS ──────────────
+      let allDays;
+      if (appIds.length === 1) {
+        const { days } = await window.api.getAppDaily(appIds[0], from, to);
+        allDays = days || [];
+      } else {
+        const results = await Promise.all(appIds.map(id => window.api.getAppDaily(id, from, to)));
+        const dayMap  = {};
+        for (const { days } of results) {
+          for (const d of days || []) {
+            if (!dayMap[d.date]) dayMap[d.date] = { date: d.date, total: 0, by_device: {} };
+            dayMap[d.date].total += d.total;
+            for (const [devId, secs] of Object.entries(d.by_device || {})) {
+              dayMap[d.date].by_device[devId] = (dayMap[d.date].by_device[devId] || 0) + secs;
+            }
+          }
+        }
+        allDays = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
+      }
+
+      loadEl.style.display = 'none';
+      if (!allDays.length || allDays.every(d => d.total === 0)) { nodataEl.style.display = ''; return; }
+
+      if (ddGrouping === 'day') {
+        ddChartRows = allDays;
+        ddLabelFn   = d => fmtDate(d.date);
+
+      } else if (ddGrouping === 'month') {
+        const byMonth = {};
+        for (const d of allDays) {
+          const key = d.date.slice(0, 7);
+          if (!byMonth[key]) byMonth[key] = { date: key, total: 0, by_device: {} };
+          byMonth[key].total += d.total;
+          for (const [id, secs] of Object.entries(d.by_device || {})) {
+            byMonth[key].by_device[id] = (byMonth[key].by_device[id] || 0) + secs;
+          }
+        }
+        ddChartRows = Object.values(byMonth).sort((a, b) => a.date.localeCompare(b.date));
+        ddLabelFn   = d => {
+          const [y, m] = d.date.split('-').map(Number);
+          return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+        };
+
+      } else { // year
+        const byYear = {};
+        for (const d of allDays) {
+          const key = d.date.slice(0, 4);
+          if (!byYear[key]) byYear[key] = { date: key, total: 0, by_device: {} };
+          byYear[key].total += d.total;
+          for (const [id, secs] of Object.entries(d.by_device || {})) {
+            byYear[key].by_device[id] = (byYear[key].by_device[id] || 0) + secs;
+          }
+        }
+        ddChartRows = Object.values(byYear).sort((a, b) => a.date.localeCompare(b.date));
+        ddLabelFn   = d => d.date;
+      }
+    }
+
+    renderDrilldownChart();
+  } catch (e) {
+    loadEl.style.display   = 'none';
+    nodataEl.style.display = '';
+    console.error('Drilldown fetch error:', e);
+  }
+}
+
+async function showAppDrilldown(app, from, to) {
+  const modal       = document.getElementById('drilldown-modal');
+  const titleEl     = document.getElementById('drilldown-title');
+  const subEl       = document.getElementById('drilldown-subtitle');
+  const pickerEl    = document.getElementById('dd-merge-picker');
+  const confirmEl   = document.getElementById('dd-merge-confirm');
+  const pickerInner = pickerEl ? pickerEl.querySelector('.merge-picker') : null;
+
+  // Store app + range in module-level state
+  ddAppRef  = app;
+  ddFromTs  = from;
+  ddToTs    = to;
+
+  // Smart default grouping based on range length
+  const rangeDays = (to - from) / 86400;
+  if      (rangeDays <= 3)   ddGrouping = 'hour';
+  else if (rangeDays <= 180) ddGrouping = 'day';
+  else if (rangeDays <= 730) ddGrouping = 'month';
+  else                        ddGrouping = 'year';
 
   // Title and subtitle
   titleEl.textContent = app.display_name;
@@ -1465,15 +1599,53 @@ async function showAppDrilldown(app, from, to) {
   }
   subEl.textContent = subText;
 
-  // Reset UI
-  loadEl.style.display    = '';
-  nodataEl.style.display  = 'none';
-  wrapEl.style.display    = 'none';
+  // Reset merge picker UI
   if (pickerEl)    pickerEl.style.display    = 'none';
   if (confirmEl)   confirmEl.style.display   = 'none';
   if (pickerInner) pickerInner.style.display = '';
+
   modal.style.display = 'flex';
-  destroyChart('dd');
+
+  // ── Date range inputs ──────────────────────────────────────────────────────
+  const fromInput = document.getElementById('dd-from-input');
+  const toInput   = document.getElementById('dd-to-input');
+  const today     = localDateStr();
+  fromInput.max   = today;
+  toInput.max     = today;
+  fromInput.value = localDateStr(new Date(from * 1000));
+  toInput.value   = localDateStr(new Date(to   * 1000));
+  fromInput.max   = toInput.value;
+  toInput.min     = fromInput.value;
+
+  fromInput.oninput = () => { toInput.min = fromInput.value; };
+  toInput.oninput   = () => { fromInput.max = toInput.value; };
+
+  document.getElementById('dd-apply-btn').onclick = () => {
+    const fv = fromInput.value, tv = toInput.value;
+    if (!fv || !tv || fv > tv) return;
+    const [fy, fm, fd] = fv.split('-').map(Number);
+    const [ty, tm, td] = tv.split('-').map(Number);
+    ddFromTs = Math.floor(new Date(fy, fm - 1, fd, 0, 0, 0).getTime() / 1000);
+    ddToTs   = Math.floor(new Date(ty, tm - 1, td, 23, 59, 59).getTime() / 1000);
+    fetchAndRenderDrilldown();
+  };
+
+  // ── Grouping buttons ───────────────────────────────────────────────────────
+  const groupEl = document.getElementById('dd-grouping');
+  groupEl.querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.group === ddGrouping);
+  });
+  groupEl.onclick = (e) => {
+    const btn = e.target.closest('.chart-type-btn');
+    if (!btn) return;
+    const g = btn.dataset.group;
+    if (g === ddGrouping) return;
+    ddGrouping = g;
+    groupEl.querySelectorAll('.chart-type-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.group === g)
+    );
+    fetchAndRenderDrilldown();
+  };
 
   // ── Chart type toggle (Bar / Line) ─────────────────────────────────────────
   const ddTypeGroup = document.getElementById('dd-chart-type');
@@ -1523,67 +1695,8 @@ async function showAppDrilldown(app, from, to) {
     if (pickerInner) pickerInner.style.display = '';
   };
 
-  // ── Fetch data ─────────────────────────────────────────────────────────────
-  try {
-    const appIds = [app.app, ...(app.mergedFrom || [])];
-    let allDays;
-
-    if (appIds.length === 1) {
-      const { days } = await window.api.getAppDaily(appIds[0], from, to);
-      allDays = days || [];
-    } else {
-      // Fetch multiple app IDs and combine by date
-      const results = await Promise.all(appIds.map(id => window.api.getAppDaily(id, from, to)));
-      const dayMap  = {};
-      for (const { days } of results) {
-        for (const d of days || []) {
-          if (!dayMap[d.date]) dayMap[d.date] = { date: d.date, total: 0, by_device: {} };
-          dayMap[d.date].total += d.total;
-          for (const [devId, secs] of Object.entries(d.by_device || {})) {
-            dayMap[d.date].by_device[devId] = (dayMap[d.date].by_device[devId] || 0) + secs;
-          }
-        }
-      }
-      allDays = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
-    }
-
-    loadEl.style.display = 'none';
-
-    if (!allDays.length || allDays.every(d => d.total === 0)) {
-      nodataEl.style.display = '';
-      return;
-    }
-
-    // In year view, aggregate days into months for readability
-    let chartRows = allDays;
-    let labelFn   = d => fmtDate(d.date);
-    if (state.mode === 'year') {
-      const byMonth = {};
-      for (const d of allDays) {
-        const key = d.date.slice(0, 7); // 'YYYY-MM'
-        if (!byMonth[key]) byMonth[key] = { date: key, total: 0, by_device: {} };
-        byMonth[key].total += d.total;
-        for (const [id, secs] of Object.entries(d.by_device || {})) {
-          byMonth[key].by_device[id] = (byMonth[key].by_device[id] || 0) + secs;
-        }
-      }
-      chartRows = Object.values(byMonth).sort((a, b) => a.date.localeCompare(b.date));
-      labelFn   = d => {
-        const [y, m] = d.date.split('-').map(Number);
-        return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' });
-      };
-    }
-
-    // Store for re-rendering on chart type toggle
-    ddChartRows = chartRows;
-    ddLabelFn   = labelFn;
-
-    renderDrilldownChart();
-  } catch (e) {
-    loadEl.style.display    = 'none';
-    nodataEl.style.display  = '';
-    console.error('Drilldown error:', e);
-  }
+  // ── Fetch and render ───────────────────────────────────────────────────────
+  await fetchAndRenderDrilldown();
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────

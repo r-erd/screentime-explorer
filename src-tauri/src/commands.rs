@@ -194,6 +194,16 @@ pub fn get_app_daily(app_id: String, from: i64, to: i64, state: State<'_, DbStat
     db::get_app_daily(&conn, &app_id, from, to).map_err(map_err)
 }
 
+#[tauri::command]
+pub fn get_app_hourly(app_id: String, from: i64, to: i64, state: State<'_, DbState>) -> Result<db::AppHourlyResult, String> {
+    validate_ts(from, to)?;
+    if app_id.is_empty() || app_id.len() > 512 {
+        return Err("Invalid app_id".into());
+    }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_app_hourly(&conn, &app_id, from, to).map_err(map_err)
+}
+
 // ── Notifications ─────────────────────────────────────────────────────────────
 
 #[tauri::command]

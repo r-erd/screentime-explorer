@@ -518,6 +518,53 @@ pub fn get_app_daily(conn: &Connection, app_id: &str, from: i64, to: i64) -> Sql
     Ok(AppDailyResult { days: by_date.into_values().collect() })
 }
 
+// ── Per-app hourly ────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Clone, Default)]
+pub struct AppHourRow {
+    pub hour:      i64,
+    pub total:     i64,
+    pub by_device: HashMap<String, i64>,
+}
+
+#[derive(Serialize)]
+pub struct AppHourlyResult {
+    pub hours:    Vec<AppHourRow>,
+    pub num_days: i64,
+}
+
+pub fn get_app_hourly(conn: &Connection, app_id: &str, from: i64, to: i64) -> SqlResult<AppHourlyResult> {
+    let num_days = ((to - from) as f64 / 86400.0).round().max(1.0) as i64;
+
+    let mut stmt = conn.prepare(
+        "SELECT CAST(strftime('%H', start_time, 'unixepoch', 'localtime') AS INTEGER) AS hour, \
+         device_id, \
+         CAST(SUM(usage_seconds) AS INTEGER) AS total \
+         FROM screentime \
+         WHERE app = ?1 AND start_time >= ?2 AND start_time <= ?3 \
+           AND usage_seconds > 0 \
+         GROUP BY hour, device_id \
+         ORDER BY hour ASC"
+    )?;
+
+    let mut hours: Vec<AppHourRow> = (0..24)
+        .map(|h| AppHourRow { hour: h, total: 0, by_device: HashMap::new() })
+        .collect();
+
+    let rows: Vec<(i64, String, i64)> = stmt.query_map(params![app_id, from, to], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?.filter_map(|r| r.ok()).collect();
+
+    for (hour, device_id, total) in rows {
+        if let Some(entry) = hours.get_mut(hour as usize) {
+            entry.by_device.insert(device_id.clone(), total);
+            entry.total += total;
+        }
+    }
+
+    Ok(AppHourlyResult { hours, num_days })
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn unix_to_date_local(ts: i64) -> String {

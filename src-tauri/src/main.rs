@@ -93,6 +93,7 @@ fn main() {
             commands::export_db,
             commands::import_db,
             commands::get_app_daily,
+            commands::get_app_hourly,
             commands::show_notification,
             commands::get_autostart,
             commands::set_autostart,

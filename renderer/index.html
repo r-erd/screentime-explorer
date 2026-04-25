@@ -523,6 +523,15 @@
     }
     .dd-action-btn:hover { border-color: var(--text3); color: var(--text2); }
 
+    /* ── Drilldown controls bar ── */
+    .dd-controls {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+    }
+    .dd-range-picker {
+      display: flex; align-items: center; gap: 5px; flex-shrink: 0;
+    }
+
     /* ── Merge picker ── */
     .merge-picker {
       margin-bottom: 12px; border: 1px solid var(--border);
@@ -1074,7 +1083,23 @@
         <button id="drilldown-close" class="modal-close">✕</button>
       </div>
     </div>
-    <div id="drilldown-subtitle" style="font-size:12px; color:var(--text4); margin-top:2px; margin-bottom:12px;"></div>
+    <div id="drilldown-subtitle" style="font-size:12px; color:var(--text4); margin-top:2px; margin-bottom:10px;"></div>
+
+    <!-- Grouping + date range controls -->
+    <div class="dd-controls" id="dd-controls">
+      <div class="chart-type-toggle" id="dd-grouping">
+        <button class="chart-type-btn" data-group="hour">Hour</button>
+        <button class="chart-type-btn active" data-group="day">Day</button>
+        <button class="chart-type-btn" data-group="month">Month</button>
+        <button class="chart-type-btn" data-group="year">Year</button>
+      </div>
+      <div class="dd-range-picker">
+        <input type="date" id="dd-from-input" class="custom-date-input">
+        <span class="custom-range-sep">→</span>
+        <input type="date" id="dd-to-input" class="custom-date-input">
+        <button id="dd-apply-btn" class="custom-apply-btn">Apply</button>
+      </div>
+    </div>
 
     <!-- Merge picker — shown when "Merge with…" is clicked -->
     <div id="dd-merge-picker" style="display:none">
