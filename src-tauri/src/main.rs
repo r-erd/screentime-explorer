@@ -73,7 +73,12 @@ fn main() {
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent, None,
             ))?;
             app.handle().plugin(tauri_plugin_notification::init())?;
+            // Window-state plugin restores the previously saved size, which may
+            // be smaller than our current minimum. Clamp after restoration.
             app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
+            if let Some(win) = app.get_webview_window("main") {
+                clamp_window_size(&win);
+            }
 
             // ── Scheduler ─────────────────────────────────────────────────────
             scheduler::start_scheduler(app.handle().clone(), shared_conn);
@@ -153,20 +158,24 @@ fn toggle_window(app: &AppHandle) {
     }
 }
 
+fn clamp_window_size(win: &tauri::WebviewWindow) {
+    // Minimum logical size that fits the full header without overflow.
+    // Stage-1 responsive CSS (≤860px) hides h1 + merge-label, so 860 is
+    // the tightest size where everything still fits comfortably.
+    const MIN_W: f64 = 900.0;
+    const MIN_H: f64 = 500.0;
+    if let (Ok(size), Ok(scale)) = (win.outer_size(), win.scale_factor()) {
+        let lw = size.width  as f64 / scale;
+        let lh = size.height as f64 / scale;
+        if lw < MIN_W || lh < MIN_H {
+            let _ = win.set_size(tauri::LogicalSize::new(lw.max(MIN_W), lh.max(MIN_H)));
+        }
+    }
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        // Clamp to minimum dimensions — the window-state plugin can restore a
-        // size that was saved before the minimum was raised, bypassing the
-        // minWidth / minHeight values in tauri.conf.json.
-        const MIN_W: f64 = 780.0;
-        const MIN_H: f64 = 500.0;
-        if let (Ok(size), Ok(scale)) = (win.outer_size(), win.scale_factor()) {
-            let lw = size.width  as f64 / scale;
-            let lh = size.height as f64 / scale;
-            if lw < MIN_W || lh < MIN_H {
-                let _ = win.set_size(tauri::LogicalSize::new(lw.max(MIN_W), lh.max(MIN_H)));
-            }
-        }
+        clamp_window_size(&win);
         let _ = win.show();
         let _ = win.set_focus();
     }

@@ -11,9 +11,9 @@
       {
         "label": "main",
         "title": "Screenlog",
-        "width": 900,
+        "width": 1100,
         "height": 620,
-        "minWidth": 800,
+        "minWidth": 860,
         "minHeight": 500,
         "visible": false,
         "decorations": true,
