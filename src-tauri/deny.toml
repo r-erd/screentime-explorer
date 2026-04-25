@@ -1,0 +1,32 @@
+[graph]
+targets = [{ triple = "aarch64-apple-darwin" }, { triple = "x86_64-apple-darwin" }]
+
+[licenses]
+# Licenses present in the macOS dependency graph.
+# Run `cargo deny list --format tsv` from src-tauri/ to regenerate.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "GPL-3.0-only",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[advisories]
+ignore = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"

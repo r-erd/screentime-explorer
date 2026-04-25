@@ -1,8 +1,9 @@
 [package]
 name = "screenlog"
-version = "1.0.0"
+version = "1.4.0"
 description = "macOS Screen Time dashboard in your menu bar"
 authors = []
+license = "GPL-3.0-only"
 edition = "2021"
 
 [build-dependencies]
