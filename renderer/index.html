@@ -217,8 +217,7 @@
     }
 
     .collect-wrap {
-      margin-left: auto; display: flex;
-      align-items: center; gap: 8px;
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0;
     }
     #collect-btn {
       display: flex; align-items: center; gap: 5px;
@@ -619,6 +618,12 @@
       .nav-arrow { width: 24px; height: 24px; font-size: 15px; }
     }
 
+    /* ── Responsive header: stage 3 — icon-only collect button ── */
+    @media (max-width: 760px) {
+      #collect-label { display: none; }
+      #collect-btn { padding: 5px 8px; }
+    }
+
     @media (max-width: 680px) {
       .stats { grid-template-columns: 1fr 1fr; }
       .stat-card:last-child { grid-column: span 2; }
@@ -688,7 +693,7 @@
 
   <div class="collect-wrap">
     <button id="collect-btn">
-      <span id="collect-icon">↻</span> Collect now
+      <span id="collect-icon">↻</span><span id="collect-label"> Collect now</span>
     </button>
     <button id="settings-btn" title="Settings">⚙</button>
   </div>
