@@ -6,6 +6,7 @@ mod scheduler;
 mod commands;
 mod biome;
 mod push;
+mod catalogue;
 
 use std::sync::{Arc, Mutex};
 use tauri::{
@@ -107,6 +108,16 @@ fn main() {
             commands::update_device_name,
             commands::test_grafana_push,
             commands::push_to_grafana,
+            commands::get_category_screentime,
+            commands::get_category_daily,
+            commands::get_category_hourly,
+            commands::get_apps_in_category,
+            commands::get_app_category,
+            commands::set_app_category,
+            commands::get_all_app_categories,
+            commands::get_categories,
+            commands::add_category,
+            commands::remove_category,
         ])
         .on_window_event(|window, event| {
             // Hide instead of close — app lives in the menu bar

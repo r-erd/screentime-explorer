@@ -522,6 +522,42 @@
     }
     .dd-action-btn:hover { border-color: var(--text3); color: var(--text2); }
 
+    /* ── By-Category toggle ── */
+    .cat-mode-btn {
+      font-family: inherit; font-size: 11px; font-weight: 500;
+      color: var(--text3); background: none; border: 1px solid var(--border-ctrl);
+      border-radius: 6px; cursor: pointer; padding: 3px 9px; white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .cat-mode-btn:hover { border-color: var(--text3); color: var(--text2); }
+    .cat-mode-btn.active {
+      background: #5856D6; border-color: #5856D6; color: #fff; font-weight: 600;
+    }
+
+    /* ── Category colour dot ── */
+    .cat-dot {
+      display: inline-block; width: 9px; height: 9px;
+      border-radius: 50%; flex-shrink: 0;
+    }
+
+    /* ── Category picker in drilldown ── */
+    .cat-picker-wrap {
+      position: relative; display: inline-block;
+    }
+    .cat-picker-dropdown {
+      position: absolute; top: calc(100% + 4px); left: 0; z-index: 100;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 4px; min-width: 160px;
+      box-shadow: 0 4px 20px var(--shadow-lg);
+    }
+    .cat-picker-option {
+      display: flex; align-items: center; gap: 7px;
+      padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
+      color: var(--text2); transition: background 0.1s;
+    }
+    .cat-picker-option:hover { background: var(--bg); }
+    .cat-picker-option.selected { font-weight: 600; }
+
     /* ── Drilldown controls bar ── */
     .dd-controls {
       display: flex; align-items: center; justify-content: space-between;
@@ -578,6 +614,31 @@
     .merge-list-names { font-size: 13px; color: var(--text2); }
     .merge-list-names strong { color: var(--text); font-weight: 600; }
     .merge-list-names .mlr-arrow { color: var(--text4); margin: 0 4px; }
+
+    /* ── Category manager ── */
+    .cat-chip-list {
+      display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px;
+    }
+    .cat-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 500;
+      background: var(--surface2); border: 1px solid var(--border-ctrl); color: var(--text2);
+    }
+    .cat-chip.builtin { opacity: 0.7; }
+    .cat-chip-del {
+      cursor: pointer; color: var(--text4); font-size: 14px; line-height: 1;
+      margin-left: 3px; border: none; background: none; padding: 0; display: flex;
+    }
+    .cat-chip-del:hover { color: var(--text1); }
+    .cat-add-row {
+      display: flex; gap: 8px; align-items: center;
+    }
+    .cat-add-input {
+      flex: 1; padding: 6px 10px; border-radius: 8px;
+      border: 1px solid var(--border-ctrl); background: var(--surface2);
+      color: var(--text); font-size: 13px; font-family: inherit; outline: none;
+    }
+    .cat-add-input:focus { border-color: var(--text3); }
 
     /* ── Custom range picker ── */
     .custom-range-picker {
@@ -748,11 +809,14 @@
 
     <div class="chart-card">
       <div class="card-title-row">
-        <div class="card-title">Top Apps</div>
-        <div class="chart-type-toggle" id="ov-chart-type">
-          <button class="chart-type-btn active" data-type="bar">Bar</button>
-          <button class="chart-type-btn" data-type="doughnut">Donut</button>
-          <button class="chart-type-btn" data-type="treemap">Treemap</button>
+        <div class="card-title" id="ov-card-title">Top Apps</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="cat-mode-btn" data-cat-toggle>By Category</button>
+          <div class="chart-type-toggle" id="ov-chart-type">
+            <button class="chart-type-btn active" data-type="bar">Bar</button>
+            <button class="chart-type-btn" data-type="doughnut">Donut</button>
+            <button class="chart-type-btn" data-type="treemap">Treemap</button>
+          </div>
         </div>
       </div>
       <div id="ov-loading" class="loading">Loading…</div>
@@ -799,9 +863,12 @@
     <div class="chart-card">
       <div class="card-title-row">
         <div class="card-title">Usage Per Day</div>
-        <div class="chart-type-toggle" id="dy-chart-type">
-          <button class="chart-type-btn active" data-type="bar">Bar</button>
-          <button class="chart-type-btn" data-type="line">Line</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="cat-mode-btn" data-cat-toggle>By Category</button>
+          <div class="chart-type-toggle" id="dy-chart-type">
+            <button class="chart-type-btn active" data-type="bar">Bar</button>
+            <button class="chart-type-btn" data-type="line">Line</button>
+          </div>
         </div>
       </div>
       <div id="dy-loading" class="loading">Loading…</div>
@@ -819,9 +886,12 @@
     <div class="chart-card">
       <div class="card-title-row">
         <div class="card-title">Average Usage by Hour of Day</div>
-        <div class="chart-type-toggle" id="hr-chart-type">
-          <button class="chart-type-btn active" data-type="bar">Bar</button>
-          <button class="chart-type-btn" data-type="line">Line</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="cat-mode-btn" data-cat-toggle>By Category</button>
+          <div class="chart-type-toggle" id="hr-chart-type">
+            <button class="chart-type-btn active" data-type="bar">Bar</button>
+            <button class="chart-type-btn" data-type="line">Line</button>
+          </div>
         </div>
       </div>
       <div id="hr-loading" class="loading">Loading…</div>
@@ -839,9 +909,12 @@
     <div class="chart-card">
       <div class="card-title-row">
         <div class="card-title">Usage Per Month</div>
-        <div class="chart-type-toggle" id="mo-chart-type">
-          <button class="chart-type-btn active" data-type="bar">Bar</button>
-          <button class="chart-type-btn" data-type="line">Line</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="cat-mode-btn" data-cat-toggle>By Category</button>
+          <div class="chart-type-toggle" id="mo-chart-type">
+            <button class="chart-type-btn active" data-type="bar">Bar</button>
+            <button class="chart-type-btn" data-type="line">Line</button>
+          </div>
         </div>
       </div>
       <div id="mo-loading" class="loading">Loading…</div>
@@ -977,6 +1050,22 @@
       <div id="merges-list"></div>
     </div>
 
+    <!-- Categories -->
+    <div class="settings-section">
+      <div class="settings-section-title">Categories</div>
+      <div style="font-size:13px;color:var(--text4);margin-bottom:12px">
+        Add custom categories to group your apps. Built-in categories (shown faded) cannot be removed.
+        Reassign individual apps to categories via the app drilldown.
+      </div>
+      <div id="cat-chip-list" class="cat-chip-list">
+        <span style="font-size:13px;color:var(--text4)">Loading…</span>
+      </div>
+      <div class="cat-add-row">
+        <input id="cat-add-input" class="cat-add-input" type="text" placeholder="New category name…" maxlength="64">
+        <button id="cat-add-btn" class="btn-secondary" style="padding:5px 14px;flex-shrink:0">Add</button>
+      </div>
+    </div>
+
     <!-- Grafana Push -->
     <div class="settings-section">
       <div class="settings-section-title">Grafana Push</div>
@@ -1083,12 +1172,30 @@
           <button class="chart-type-btn active" data-type="bar">Bar</button>
           <button class="chart-type-btn" data-type="line">Line</button>
         </div>
+        <!-- App-drilldown only -->
         <button id="dd-rename-btn" class="dd-action-btn">Rename…</button>
         <button id="dd-merge-btn" class="dd-action-btn">Merge with…</button>
+        <!-- Category-drilldown only -->
+        <div class="chart-type-toggle" id="dd-cat-view" style="display:none">
+          <button class="chart-type-btn active" data-view="total">Over Time</button>
+          <button class="chart-type-btn" data-view="byapp">By App</button>
+        </div>
         <button id="drilldown-close" class="modal-close">✕</button>
       </div>
     </div>
     <div id="drilldown-subtitle" style="font-size:12px; color:var(--text4); margin-top:2px; margin-bottom:10px;"></div>
+
+    <!-- App category picker row — shown in app drilldown -->
+    <div id="dd-cat-row" style="display:none; margin-bottom:10px; align-items:center; gap:6px;">
+      <span style="font-size:12px; color:var(--text4);">Category:</span>
+      <div class="cat-picker-wrap">
+        <button id="dd-cat-picker-btn" class="dd-action-btn" style="display:flex;align-items:center;gap:5px">
+          <span class="cat-dot" id="dd-cat-dot"></span>
+          <span id="dd-cat-name">Other</span> ▾
+        </button>
+        <div id="dd-cat-dropdown" class="cat-picker-dropdown" style="display:none"></div>
+      </div>
+    </div>
 
     <!-- Grouping + date range controls -->
     <div class="dd-controls" id="dd-controls">

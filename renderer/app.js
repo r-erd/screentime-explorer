@@ -2,6 +2,24 @@
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+let CATEGORIES = [
+  'Social', 'Productivity', 'Entertainment', 'Communication',
+  'Browser', 'Developer Tools', 'Health & Fitness', 'Utilities', 'Games', 'Other',
+];
+
+const CATEGORY_COLORS = {
+  'Social':          '#FF6B6B',
+  'Productivity':    '#007AFF',
+  'Entertainment':   '#FF9500',
+  'Communication':   '#34C759',
+  'Browser':         '#5856D6',
+  'Developer Tools': '#00C7BE',
+  'Health & Fitness':'#FF2D55',
+  'Utilities':       '#8E8E93',
+  'Games':           '#AF52DE',
+  'Other':           '#AEB6BF',
+};
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const state = {
@@ -24,6 +42,7 @@ const settings = {
   chartStyleOverview:     'bar',     // 'bar' | 'doughnut' | 'treemap'
   chartStyleDrilldown:    'bar',     // 'bar' | 'line'  — App drilldown
   appMerges:              [],        // [{primary, primaryName, secondary, secondaryName}]
+  groupByCategory:        false,
 };
 
 // Categorical palette for donut/treemap — Apple system colours, all dark enough for white text
@@ -39,12 +58,51 @@ const charts = {};
 let cachedAllApps = [];
 
 // Drilldown state — stored so chart type toggle can re-render without re-fetching.
-let ddChartRows   = [];
-let ddLabelFn     = null;
-let ddGrouping    = 'day';   // 'hour' | 'day' | 'month' | 'year'
-let ddAppRef      = null;    // current app object being drilled into
-let ddFromTs      = 0;       // unix timestamps for the active drilldown range
-let ddToTs        = 0;
+let ddChartRows          = [];
+let ddLabelFn            = null;
+let ddGrouping           = 'day';   // 'hour' | 'day' | 'month' | 'year'
+let ddAppRef             = null;    // current app object being drilled into
+let ddFromTs             = 0;       // unix timestamps for the active drilldown range
+let ddToTs               = 0;
+let ddIsCategoryDrilldown = false;
+let ddCategoryName        = null;
+let ddCategoryView        = 'total'; // 'total' | 'byapp'
+
+// Category data cached after overview load — order maps chart index → category name
+let cachedCategoryOrder  = [];
+
+// ── Category helpers ──────────────────────────────────────────────────────────
+
+// Returns Chart.js datasets for a stacked category chart.
+// getByCategory(row) must return the {category: seconds} map for that row.
+function categoryDatasets(rows, getByCategory, isLine = false) {
+  return CATEGORIES.map(cat => {
+    const data = rows.map(r => Math.round((getByCategory(r)[cat] || 0) / 60));
+    if (data.every(v => v === 0)) return null;
+    const color = CATEGORY_COLORS[cat] || '#AEB6BF';
+    return isLine
+      ? { ...lineDs(cat, data, color, false), stack: 'stack' }
+      : { label: cat, data, backgroundColor: color, stack: 'stack' };
+  }).filter(Boolean);
+}
+
+function updateCatModeButtons() {
+  document.querySelectorAll('.cat-mode-btn[data-cat-toggle]').forEach(btn => {
+    btn.classList.toggle('active', settings.groupByCategory);
+  });
+  // Merge-overlaps toggle is now meaningful in category mode (dedup is computed
+  // via interval merging when all devices are visible), so always show it.
+  const mergeWrap = document.querySelector('.merge-wrap');
+  if (mergeWrap) mergeWrap.style.display = '';
+}
+
+function setCategoryMode(enabled) {
+  settings.groupByCategory = enabled;
+  saveSettings();
+  updateCatModeButtons();
+  renderDevicePills(); // pills behave differently in category mode
+  loadCurrentTab();
+}
 
 // ── Settings persistence ──────────────────────────────────────────────────────
 
@@ -276,6 +334,19 @@ function visibleDevices() {
   return state.devices.filter(d => !state.hiddenDevices.has(d.device_id));
 }
 
+// In category mode: returns the device_id to pass to backend queries.
+// When exactly one device is visible → filter to it; otherwise → null (all devices).
+function categoryDeviceFilter() {
+  const visible = visibleDevices();
+  return visible.length === 1 ? visible[0].device_id : null;
+}
+
+// Whether to request dedup'd category totals: only when showing all devices combined
+// (a single-device filter has no overlaps to remove) and the user has dedup enabled.
+function categoryDedup() {
+  return settings.deduplicateDeviceTime && categoryDeviceFilter() === null;
+}
+
 // Build typed datasets array from state.devices for Chart.js, skipping hidden devices.
 function deviceDatasets(dataFn) {
   return state.devices.map((dev, i) => {
@@ -412,10 +483,14 @@ function renderDevicePills() {
       if (state.hiddenDevices.has(dev.device_id)) {
         state.hiddenDevices.delete(dev.device_id);
       } else {
-        // Don't allow hiding all devices
         const wouldRemain = state.devices.filter(d => !state.hiddenDevices.has(d.device_id) && d.device_id !== dev.device_id);
-        if (wouldRemain.length === 0) return;
-        state.hiddenDevices.add(dev.device_id);
+        if (wouldRemain.length === 0) {
+          // Last visible device clicked: in category mode show all; in normal mode block
+          if (settings.groupByCategory) state.hiddenDevices.clear();
+          else return;
+        } else {
+          state.hiddenDevices.add(dev.device_id);
+        }
       }
       renderDevicePills();
       loadCurrentTab();
@@ -492,6 +567,11 @@ let drilldownClickTimer = null;
 async function loadOverview() {
   showTabState('ov', 'loading');
   const [from, to] = getApiRange();
+
+  if (settings.groupByCategory) {
+    await loadCategoryOverview(from, to);
+    return;
+  }
 
   // Fetch app breakdown + daily totals in parallel (daily needed for KPIs)
   const [{ apps, dedup_total: periodDedupSec }, { days }] = await Promise.all([
@@ -705,11 +785,144 @@ async function loadOverview() {
   }
 }
 
+// ── Category overview ─────────────────────────────────────────────────────────
+
+async function loadCategoryOverview(from, to) {
+  const { categories } = await window.api.getCategoryScreentime(from, to, categoryDeviceFilter(), categoryDedup());
+  const filtered = (categories || []).filter(c => c.total > 0);
+
+  if (filtered.length === 0) {
+    showTabState('ov', 'nodata');
+    document.getElementById('ov-total').textContent = '—';
+    document.getElementById('ov-apps').textContent  = '—';
+    document.getElementById('ov-avg').textContent   = '—';
+    document.getElementById('ov-kpi').style.display = 'none';
+    const ovBd = document.getElementById('ov-total-devices');
+    if (ovBd) { ovBd.innerHTML = ''; ovBd.style.display = 'none'; }
+    return;
+  }
+
+  const total   = filtered.reduce((s, c) => s + c.total, 0);
+  const numDays = Math.max(1, Math.round((to - from) / 86400));
+  document.getElementById('ov-total').textContent = fmtHours(total);
+  document.getElementById('ov-apps').textContent  = String(filtered.length);
+  document.getElementById('ov-avg').textContent   = fmtHours(total / numDays);
+  document.getElementById('ov-kpi').style.display = 'none';
+  const ovBd = document.getElementById('ov-total-devices');
+  if (ovBd) { ovBd.innerHTML = ''; ovBd.style.display = 'none'; }
+
+  cachedCategoryOrder = filtered.map(c => c.category);
+
+  showTabState('ov', 'data');
+  destroyChart('ov');
+
+  const dark    = document.documentElement.getAttribute('data-theme') === 'dark';
+  const ovStyle = settings.chartStyleOverview;
+  const canvas  = document.getElementById('ov-chart');
+  canvas.ondblclick = null;
+
+  if (ovStyle === 'bar') {
+    canvas.style.height = `${Math.max(280, filtered.length * 32)}px`;
+    canvas.title = 'Click any row to see category history';
+
+    charts['ov'] = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels:   filtered.map(c => c.category),
+        datasets: [{ label: 'Screen time', data: filtered.map(c => Math.round(c.total / 60)), backgroundColor: filtered.map(c => CATEGORY_COLORS[c.category] || '#AEB6BF') }],
+      },
+      options: {
+        indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => ` ${fmtHours(ctx.raw * 60)}` } },
+        },
+        scales: {
+          x: { ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+          y: { ticks: { font: { size: 12 } } },
+        },
+      },
+    });
+    charts['ov'].options.onClick = (_, elements) => {
+      if (!elements.length) return;
+      showCategoryDrilldown(filtered[elements[0].index].category, from, to);
+    };
+
+  } else if (ovStyle === 'doughnut') {
+    canvas.style.height = '360px';
+    canvas.title = 'Click any slice to see category history';
+    const totalMin = total / 60;
+
+    charts['ov'] = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: filtered.map(c => c.category),
+        datasets: [{ data: filtered.map(c => Math.round(c.total / 60)), backgroundColor: filtered.map(c => CATEGORY_COLORS[c.category] || '#AEB6BF'), borderWidth: 2, borderColor: dark ? '#2c2c2e' : '#ffffff', hoverOffset: 8 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '62%',
+        plugins: {
+          legend: { position: 'right', labels: { boxWidth: 10, font: { size: 11 }, padding: 10 } },
+          tooltip: { callbacks: { label: ctx => ` ${fmtHours(ctx.raw * 60)} — ${Math.round(ctx.raw / totalMin * 100)}%` } },
+        },
+      },
+    });
+    charts['ov'].options.onClick = (_, elements) => {
+      if (!elements.length) return;
+      showCategoryDrilldown(filtered[elements[0].index].category, from, to);
+    };
+
+  } else { // treemap
+    canvas.style.height = '380px';
+    canvas.title = 'Click any cell to see category history';
+
+    const treeData = filtered.map((c, i) => ({ v: Math.round(c.total / 60), label: c.category, category: c.category, idx: i }));
+    charts['ov'] = new Chart(canvas, {
+      type: 'treemap',
+      data: {
+        datasets: [{
+          tree: treeData, key: 'v',
+          backgroundColor: ctx => {
+            if (!ctx.raw?._data) return '#AEB6BF';
+            return CATEGORY_COLORS[ctx.raw._data.category] || '#AEB6BF';
+          },
+          borderWidth: 2, borderColor: dark ? '#1c1c1e' : '#f5f5f7', spacing: 1,
+          labels: {
+            display: true, overflow: 'cut', padding: 5, color: '#ffffff',
+            font: [{ size: 12, weight: '600' }, { size: 11, weight: '400' }],
+            formatter: ctx => ctx.raw?._data ? [ctx.raw._data.label, fmtHours(ctx.raw.v * 60)] : '',
+          },
+          captions: { display: false },
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { title: items => items[0].raw._data.category, label: ctx => ` ${fmtHours(ctx.raw.v * 60)}` } },
+        },
+      },
+    });
+    charts['ov'].options.onClick = (_, elements) => {
+      if (!elements.length) return;
+      const d = elements[0].element.$context.raw._data;
+      if (!d?.category) return;
+      showCategoryDrilldown(d.category, from, to);
+    };
+  }
+}
+
 // ── Daily ─────────────────────────────────────────────────────────────────────
 
 async function loadDaily() {
   showTabState('dy', 'loading');
   const [from, to] = getApiRange();
+
+  if (settings.groupByCategory) {
+    await loadCategoryDaily(from, to);
+    return;
+  }
+
   const { days } = await window.api.getDaily(from, to);
 
   const dedup = settings.deduplicateDeviceTime;
@@ -900,6 +1113,64 @@ async function loadDaily() {
   });
 }
 
+// ── Category daily ────────────────────────────────────────────────────────────
+
+async function loadCategoryDaily(from, to) {
+  const { days } = await window.api.getCategoryDaily(from, to, categoryDeviceFilter(), categoryDedup());
+  const allTotals = (days || []).map(d => Object.values(d.by_category || {}).reduce((s, v) => s + v, 0));
+  const grandTotal = allTotals.reduce((s, v) => s + v, 0);
+
+  if (grandTotal === 0 || !days || !days.length) {
+    showTabState('dy', 'nodata');
+    document.getElementById('dy-total').textContent = '—';
+    document.getElementById('dy-avg').textContent   = '—';
+    document.getElementById('dy-peak').textContent  = '—';
+    document.getElementById('dy-kpi').style.display = 'none';
+    const dyBd = document.getElementById('dy-total-devices');
+    if (dyBd) { dyBd.innerHTML = ''; dyBd.style.display = 'none'; }
+    return;
+  }
+
+  const nonZero = allTotals.filter(v => v > 0);
+  const avg     = grandTotal / Math.max(1, nonZero.length);
+  const peakIdx = allTotals.indexOf(Math.max(...allTotals));
+
+  document.getElementById('dy-total').textContent = fmtHours(grandTotal);
+  document.getElementById('dy-avg').textContent   = fmtHours(avg);
+  document.getElementById('dy-peak').textContent  = fmtDateWithYear(days[peakIdx].date);
+  document.getElementById('dy-kpi').style.display = 'none';
+  const dyBd = document.getElementById('dy-total-devices');
+  if (dyBd) { dyBd.innerHTML = ''; dyBd.style.display = 'none'; }
+
+  showTabState('dy', 'data');
+  destroyChart('dy');
+
+  const isLine   = settings.chartStyle === 'line';
+  const datasets = categoryDatasets(days, d => d.by_category || {}, isLine);
+  const maxVal   = Math.max(...allTotals.map(t => t / 60), 1);
+
+  charts['dy'] = new Chart(document.getElementById('dy-chart'), {
+    type: isLine ? 'line' : 'bar',
+    data: { labels: days.map(d => fmtDate(d.date)), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+            footer: items => items.length < 2 ? [] : [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`],
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: true, ticks: { stepSize: niceStepMin(maxVal), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+      },
+    },
+  });
+}
+
 // ── KPI section ───────────────────────────────────────────────────────────────
 
 function renderKpis(days, totals, prefix) {
@@ -954,6 +1225,12 @@ function renderKpis(days, totals, prefix) {
 async function loadHourly() {
   showTabState('hr', 'loading');
   const [from, to] = getApiRange();
+
+  if (settings.groupByCategory) {
+    await loadCategoryHourly(from, to);
+    return;
+  }
+
   const { hours, num_days } = await window.api.getHourly(from, to);
 
   const dedup = settings.deduplicateDeviceTime;
@@ -1039,11 +1316,66 @@ async function loadHourly() {
   });
 }
 
+// ── Category hourly ───────────────────────────────────────────────────────────
+
+async function loadCategoryHourly(from, to) {
+  const { hours } = await window.api.getCategoryHourly(from, to, categoryDeviceFilter(), categoryDedup());
+  const allTotals = (hours || []).map(h => Object.values(h.by_category || {}).reduce((s, v) => s + v, 0));
+  const grandTotal = allTotals.reduce((s, v) => s + v, 0);
+
+  if (grandTotal === 0 || !hours || !hours.length) {
+    showTabState('hr', 'nodata');
+    document.getElementById('hr-peak').textContent     = '—';
+    document.getElementById('hr-peak-val').textContent = '—';
+    document.getElementById('hr-quiet').textContent    = '—';
+    return;
+  }
+
+  const peakIdx        = allTotals.indexOf(Math.max(...allTotals));
+  const nonZeroEntries = allTotals.map((v, i) => ({ v, i })).filter(x => x.v > 0);
+  const quietEntry     = nonZeroEntries.reduce((min, x) => x.v < min.v ? x : min, nonZeroEntries[0]);
+
+  document.getElementById('hr-peak').textContent     = fmtHour(hours[peakIdx].hour);
+  document.getElementById('hr-peak-val').textContent = fmtHours(allTotals[peakIdx]);
+  document.getElementById('hr-quiet').textContent    = quietEntry ? fmtHour(hours[quietEntry.i].hour) : '—';
+
+  showTabState('hr', 'data');
+  destroyChart('hr');
+
+  const isLine   = settings.chartStyle === 'line';
+  const datasets = categoryDatasets(hours, h => h.by_category || {}, isLine);
+  const maxVal   = Math.max(...allTotals.map(t => t / 60), 1);
+
+  charts['hr'] = new Chart(document.getElementById('hr-chart'), {
+    type: isLine ? 'line' : 'bar',
+    data: { labels: hours.map(h => fmtHour(h.hour)), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: {
+          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)} avg` },
+        },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: true, ticks: { stepSize: niceStepMin(maxVal), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+      },
+    },
+  });
+}
+
 // ── Monthly (Year mode only) ──────────────────────────────────────────────────
 
 async function loadMonthly() {
   showTabState('mo', 'loading');
   const [from, to] = getApiRange();
+
+  if (settings.groupByCategory) {
+    await loadCategoryMonthly(from, to);
+    return;
+  }
+
   const { days } = await window.api.getDaily(from, to);
 
   // Aggregate daily rows into month buckets
@@ -1139,6 +1471,74 @@ async function loadMonthly() {
       scales: {
         x: { stacked: stackBars, grid: { display: false }, ticks: { font: { size: 11 } } },
         y: { stacked: stackBars, ticks: { stepSize: niceStepMin(Math.max(...totals.map(t => t / 60))), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+      },
+    },
+  });
+}
+
+// ── Category monthly ──────────────────────────────────────────────────────────
+
+async function loadCategoryMonthly(from, to) {
+  const { days } = await window.api.getCategoryDaily(from, to, categoryDeviceFilter(), categoryDedup());
+
+  // Aggregate by month
+  const monthMap = new Map();
+  for (const day of (days || [])) {
+    const key = day.date.slice(0, 7);
+    if (!monthMap.has(key)) monthMap.set(key, { key, by_category: {} });
+    const b = monthMap.get(key);
+    for (const [cat, secs] of Object.entries(day.by_category || {})) {
+      b.by_category[cat] = (b.by_category[cat] || 0) + secs;
+    }
+  }
+  const months    = [...monthMap.values()];
+  const allTotals = months.map(m => Object.values(m.by_category || {}).reduce((s, v) => s + v, 0));
+  const grandTotal = allTotals.reduce((s, v) => s + v, 0);
+
+  if (grandTotal === 0 || !months.length) {
+    showTabState('mo', 'nodata');
+    document.getElementById('mo-total').textContent = '—';
+    document.getElementById('mo-avg').textContent   = '—';
+    document.getElementById('mo-peak').textContent  = '—';
+    return;
+  }
+
+  const nonZero   = allTotals.filter(v => v > 0);
+  const avg       = grandTotal / Math.max(1, nonZero.length);
+  const peakIdx   = allTotals.indexOf(Math.max(...allTotals));
+  const peakKey   = months[peakIdx].key;
+  const peakYear  = Number(peakKey.split('-')[0]);
+  const peakLabel = fmtMonth(peakKey) + (peakYear !== new Date().getFullYear() ? ` ${peakYear}` : '');
+
+  document.getElementById('mo-total').textContent = fmtHours(grandTotal);
+  document.getElementById('mo-avg').textContent   = fmtHours(avg);
+  document.getElementById('mo-peak').textContent  = peakLabel;
+
+  showTabState('mo', 'data');
+  destroyChart('mo');
+
+  const isLine   = settings.chartStyle === 'line';
+  const datasets = categoryDatasets(months, m => m.by_category || {}, isLine);
+  const maxVal   = Math.max(...allTotals.map(t => t / 60), 1);
+
+  charts['mo'] = new Chart(document.getElementById('mo-chart'), {
+    type: isLine ? 'line' : 'bar',
+    data: { labels: months.map(m => fmtMonth(m.key)), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            title: items => { const m = months[items[0].dataIndex]; return `${fmtMonth(m.key)} ${m.key.split('-')[0]}`; },
+            label: ctx => ` ${ctx.dataset.label}: ${fmtHours(ctx.raw * 60)}`,
+            footer: items => items.length < 2 ? [] : [`Total: ${fmtHours(items.reduce((s, i) => s + i.raw, 0) * 60)}`],
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: { stacked: true, ticks: { stepSize: niceStepMin(maxVal), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
       },
     },
   });
@@ -1382,6 +1782,65 @@ function renderMergePickerList(currentApp, query) {
   }
 }
 
+// ── Category management (settings panel) ─────────────────────────────────────
+
+/** Fetch the category list from the backend, update the global CATEGORIES array,
+ *  and re-render the settings chip list if the panel is open. */
+async function refreshCategories() {
+  try {
+    const { categories } = await window.api.getCategories();
+    if (Array.isArray(categories) && categories.length > 0) {
+      CATEGORIES = categories;
+    }
+  } catch { /* keep defaults */ }
+}
+
+/** Render the category chip list in the settings panel. */
+async function renderCategoriesSettings() {
+  const container = document.getElementById('cat-chip-list');
+  if (!container) return;
+
+  container.innerHTML = '<span style="font-size:13px;color:var(--text4)">Loading…</span>';
+
+  let categories = [], builtin = [];
+  try {
+    const res = await window.api.getCategories();
+    categories = res.categories || [];
+    builtin    = res.builtin    || [];
+    CATEGORIES = categories; // keep global in sync
+  } catch {
+    container.innerHTML = '<span style="font-size:13px;color:var(--text4)">Failed to load categories.</span>';
+    return;
+  }
+
+  container.innerHTML = '';
+  for (const cat of categories) {
+    const isBuiltin = builtin.includes(cat);
+    const chip = document.createElement('span');
+    chip.className = 'cat-chip' + (isBuiltin ? ' builtin' : '');
+    const dot = `<span class="cat-dot" style="background:${CATEGORY_COLORS[cat] || '#AEB6BF'};margin-right:1px"></span>`;
+    chip.innerHTML = dot + escHtml(cat);
+
+    if (!isBuiltin) {
+      const del = document.createElement('button');
+      del.className = 'cat-chip-del';
+      del.title = 'Remove category (apps moved to Other)';
+      del.textContent = '×';
+      del.addEventListener('click', async () => {
+        try {
+          await window.api.removeCategory(cat);
+          await renderCategoriesSettings();
+          if (settings.groupByCategory) loadCurrentTab();
+        } catch (err) {
+          alert('Could not remove category: ' + (err?.message || err));
+        }
+      });
+      chip.appendChild(del);
+    }
+    container.appendChild(chip);
+  }
+}
+
 // ── App drill-down modal ──────────────────────────────────────────────────────
 
 function closeDrilldown() {
@@ -1575,6 +2034,9 @@ async function showAppDrilldown(app, from, to) {
   const confirmEl   = document.getElementById('dd-merge-confirm');
   const pickerInner = pickerEl ? pickerEl.querySelector('.merge-picker') : null;
 
+  // Mark as app drilldown (not category)
+  ddIsCategoryDrilldown = false;
+
   // Store app + range in module-level state
   ddAppRef  = app;
   ddFromTs  = from;
@@ -1598,6 +2060,11 @@ async function showAppDrilldown(app, from, to) {
     subText = (subText ? subText + ' · ' : '') + `Merged with: ${mergedNames}`;
   }
   subEl.textContent = subText;
+
+  // Show/hide header controls appropriate for an app drilldown
+  document.getElementById('dd-rename-btn').style.display = '';
+  document.getElementById('dd-merge-btn').style.display  = '';
+  document.getElementById('dd-cat-view').style.display   = 'none';
 
   // Reset merge picker UI
   if (pickerEl)    pickerEl.style.display    = 'none';
@@ -1695,8 +2162,310 @@ async function showAppDrilldown(app, from, to) {
     if (pickerInner) pickerInner.style.display = '';
   };
 
+  // ── Category picker ────────────────────────────────────────────────────────
+  const catRow        = document.getElementById('dd-cat-row');
+  const catPickerBtn  = document.getElementById('dd-cat-picker-btn');
+  const catDropdown   = document.getElementById('dd-cat-dropdown');
+  const catDotEl      = document.getElementById('dd-cat-dot');
+  const catNameEl     = document.getElementById('dd-cat-name');
+
+  catRow.style.display = 'flex';
+
+  // Load current category for this app
+  let currentCat = 'Other';
+  try {
+    const res = await window.api.getAppCategory(app.app);
+    currentCat = res.category || 'Other';
+  } catch { /* default to Other */ }
+  catDotEl.style.background = CATEGORY_COLORS[currentCat] || '#AEB6BF';
+  catNameEl.textContent = currentCat;
+
+  // Populate dropdown with all categories
+  catDropdown.innerHTML = '';
+  CATEGORIES.forEach(cat => {
+    const opt = document.createElement('div');
+    opt.className = 'cat-picker-option' + (cat === currentCat ? ' selected' : '');
+    opt.innerHTML = `<span class="cat-dot" style="background:${CATEGORY_COLORS[cat] || '#AEB6BF'}"></span> ${escHtml(cat)}`;
+    opt.addEventListener('click', async () => {
+      catDropdown.style.display = 'none';
+      await window.api.setAppCategory(app.app, cat);
+      catDotEl.style.background = CATEGORY_COLORS[cat] || '#AEB6BF';
+      catNameEl.textContent = cat;
+      catDropdown.querySelectorAll('.cat-picker-option').forEach(o => {
+        o.classList.toggle('selected', o.textContent.trim() === cat);
+      });
+      // If category mode is on, refresh the current tab so changes are reflected
+      if (settings.groupByCategory) loadCurrentTab();
+    });
+    catDropdown.appendChild(opt);
+  });
+
+  catPickerBtn.onclick = () => {
+    const isOpen = catDropdown.style.display !== 'none';
+    catDropdown.style.display = isOpen ? 'none' : '';
+  };
+  // Close dropdown when clicking outside
+  const closeCatDropdown = (e) => {
+    if (!catRow.contains(e.target)) {
+      catDropdown.style.display = 'none';
+      document.removeEventListener('click', closeCatDropdown, true);
+    }
+  };
+  document.addEventListener('click', closeCatDropdown, true);
+
   // ── Fetch and render ───────────────────────────────────────────────────────
   await fetchAndRenderDrilldown();
+}
+
+// ── Category drilldown ────────────────────────────────────────────────────────
+
+async function showCategoryDrilldown(category, from, to) {
+  const modal   = document.getElementById('drilldown-modal');
+  const titleEl = document.getElementById('drilldown-title');
+  const subEl   = document.getElementById('drilldown-subtitle');
+
+  ddIsCategoryDrilldown = true;
+  ddCategoryName        = category;
+  ddCategoryView        = 'total';
+  ddFromTs              = from;
+  ddToTs                = to;
+
+  // Smart default grouping
+  const rangeDays = (to - from) / 86400;
+  if      (rangeDays <= 3)   ddGrouping = 'hour';
+  else if (rangeDays <= 180) ddGrouping = 'day';
+  else if (rangeDays <= 730) ddGrouping = 'month';
+  else                        ddGrouping = 'year';
+
+  titleEl.textContent = category;
+  subEl.textContent   = 'Category';
+
+  // Show/hide appropriate header controls
+  document.getElementById('dd-rename-btn').style.display    = 'none';
+  document.getElementById('dd-merge-btn').style.display     = 'none';
+  document.getElementById('dd-cat-view').style.display      = '';
+  document.getElementById('dd-cat-row').style.display       = 'none';
+  document.getElementById('dd-merge-picker').style.display  = 'none';
+  document.getElementById('dd-merge-confirm').style.display = 'none';
+
+  // Sync cat-view toggle
+  document.getElementById('dd-cat-view').querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === ddCategoryView);
+  });
+
+  modal.style.display = 'flex';
+
+  // ── Date range inputs ──────────────────────────────────────────────────────
+  const fromInput = document.getElementById('dd-from-input');
+  const toInput   = document.getElementById('dd-to-input');
+  const today     = localDateStr();
+  fromInput.max   = today; toInput.max = today;
+  fromInput.value = localDateStr(new Date(from * 1000));
+  toInput.value   = localDateStr(new Date(to   * 1000));
+  fromInput.max   = toInput.value;
+  toInput.min     = fromInput.value;
+  fromInput.oninput = () => { toInput.min = fromInput.value; };
+  toInput.oninput   = () => { fromInput.max = toInput.value; };
+
+  document.getElementById('dd-apply-btn').onclick = () => {
+    const fv = fromInput.value, tv = toInput.value;
+    if (!fv || !tv || fv > tv) return;
+    const [fy, fm, fd] = fv.split('-').map(Number);
+    const [ty, tm, td] = tv.split('-').map(Number);
+    ddFromTs = Math.floor(new Date(fy, fm - 1, fd, 0, 0, 0).getTime() / 1000);
+    ddToTs   = Math.floor(new Date(ty, tm - 1, td, 23, 59, 59).getTime() / 1000);
+    fetchAndRenderCategoryDrilldown();
+  };
+
+  // ── Grouping buttons ───────────────────────────────────────────────────────
+  const groupEl = document.getElementById('dd-grouping');
+  groupEl.querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.group === ddGrouping);
+  });
+  groupEl.onclick = (e) => {
+    const btn = e.target.closest('.chart-type-btn');
+    if (!btn) return;
+    const g = btn.dataset.group;
+    if (g === ddGrouping) return;
+    ddGrouping = g;
+    groupEl.querySelectorAll('.chart-type-btn').forEach(b => b.classList.toggle('active', b.dataset.group === g));
+    fetchAndRenderCategoryDrilldown();
+  };
+
+  // ── Chart type toggle ──────────────────────────────────────────────────────
+  const ddTypeGroup = document.getElementById('dd-chart-type');
+  ddTypeGroup.querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === settings.chartStyleDrilldown);
+  });
+  ddTypeGroup.onclick = (e) => {
+    if (ddCategoryView === 'byapp') return; // not applicable in by-app mode
+    const btn = e.target.closest('.chart-type-btn');
+    if (!btn) return;
+    const type = btn.dataset.type;
+    if (type === settings.chartStyleDrilldown) return;
+    settings.chartStyleDrilldown = type;
+    saveSettings();
+    ddTypeGroup.querySelectorAll('.chart-type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === type));
+    fetchAndRenderCategoryDrilldown();
+  };
+
+  await fetchAndRenderCategoryDrilldown();
+}
+
+async function fetchAndRenderCategoryDrilldown() {
+  const loadEl   = document.getElementById('drilldown-loading');
+  const nodataEl = document.getElementById('drilldown-nodata');
+  const wrapEl   = document.getElementById('drilldown-wrap');
+
+  loadEl.style.display   = '';
+  nodataEl.style.display = 'none';
+  wrapEl.style.display   = 'none';
+  destroyChart('dd');
+
+  // Sync cat-view toggle UI
+  document.getElementById('dd-cat-view').querySelectorAll('.chart-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === ddCategoryView);
+  });
+
+  // Show/hide grouping + chart-type controls depending on view
+  const showTimeControls = ddCategoryView === 'total';
+  document.getElementById('dd-grouping').style.display   = showTimeControls ? '' : 'none';
+  document.getElementById('dd-chart-type').style.display = showTimeControls ? '' : 'none';
+
+  try {
+    if (ddCategoryView === 'byapp') {
+      // ── Top apps in this category ────────────────────────────────────────────
+      const { apps } = await window.api.getAppsInCategory(ddCategoryName, ddFromTs, ddToTs);
+      loadEl.style.display = 'none';
+      if (!apps || apps.length === 0) { nodataEl.style.display = ''; return; }
+
+      const color = CATEGORY_COLORS[ddCategoryName] || '#AEB6BF';
+      wrapEl.style.display = '';
+      wrapEl.style.height  = `${Math.max(260, apps.length * 30)}px`;
+
+      charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
+        type: 'bar',
+        data: {
+          labels: apps.map(a => a.display_name),
+          datasets: [{ label: ddCategoryName, data: apps.map(a => Math.round(a.total / 60)), backgroundColor: color }],
+        },
+        options: {
+          indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: items => { const a = apps[items[0].dataIndex]; return a.display_name !== a.app ? `${a.display_name} (${a.app})` : a.app; },
+                label: ctx => ` ${fmtHours(ctx.raw * 60)}`,
+              },
+            },
+          },
+          scales: {
+            x: { ticks: { callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+            y: { ticks: { font: { size: 12 } } },
+          },
+        },
+      });
+
+    } else {
+      // ── Over Time ────────────────────────────────────────────────────────────
+      const color  = CATEGORY_COLORS[ddCategoryName] || '#AEB6BF';
+      const isLine = settings.chartStyleDrilldown === 'line';
+
+      if (ddGrouping === 'hour') {
+        const { hours } = await window.api.getCategoryHourly(ddFromTs, ddToTs, categoryDeviceFilter());
+        loadEl.style.display = 'none';
+        const values = (hours || []).map(h => Math.round((h.by_category?.[ddCategoryName] || 0) / 60));
+        if (values.every(v => v === 0)) { nodataEl.style.display = ''; return; }
+
+        const maxVal = Math.max(...values, 1);
+        wrapEl.style.display = ''; wrapEl.style.height = '260px';
+
+        const ds = isLine
+          ? lineDs(ddCategoryName, values, color, true)
+          : { label: ddCategoryName, data: values, backgroundColor: color };
+
+        charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
+          type: isLine ? 'line' : 'bar',
+          data: { labels: (hours || []).map(h => fmtHour(h.hour)), datasets: [ds] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: { title: items => fmtHourOfDay((hours || [])[items[0].dataIndex]?.hour ?? 0), label: ctx => ` ${fmtHours(ctx.raw * 60)} avg` } },
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+              y: { ticks: { stepSize: niceStepMin(maxVal), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+            },
+          },
+        });
+
+      } else {
+        const { days } = await window.api.getCategoryDaily(ddFromTs, ddToTs, categoryDeviceFilter());
+        loadEl.style.display = 'none';
+        if (!days || !days.length) { nodataEl.style.display = ''; return; }
+
+        let rows, labelFn;
+        if (ddGrouping === 'day') {
+          rows    = days;
+          labelFn = d => fmtDate(d.date);
+        } else if (ddGrouping === 'month') {
+          const byMonth = {};
+          for (const d of days) {
+            const key = d.date.slice(0, 7);
+            if (!byMonth[key]) byMonth[key] = { date: key, by_category: {} };
+            for (const [cat, secs] of Object.entries(d.by_category || {})) {
+              byMonth[key].by_category[cat] = (byMonth[key].by_category[cat] || 0) + secs;
+            }
+          }
+          rows = Object.values(byMonth).sort((a, b) => a.date.localeCompare(b.date));
+          labelFn = d => { const [y, m] = d.date.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }); };
+        } else { // year
+          const byYear = {};
+          for (const d of days) {
+            const key = d.date.slice(0, 4);
+            if (!byYear[key]) byYear[key] = { date: key, by_category: {} };
+            for (const [cat, secs] of Object.entries(d.by_category || {})) {
+              byYear[key].by_category[cat] = (byYear[key].by_category[cat] || 0) + secs;
+            }
+          }
+          rows    = Object.values(byYear).sort((a, b) => a.date.localeCompare(b.date));
+          labelFn = d => d.date;
+        }
+
+        const values = rows.map(r => Math.round((r.by_category?.[ddCategoryName] || 0) / 60));
+        if (values.every(v => v === 0)) { nodataEl.style.display = ''; return; }
+
+        const maxVal = Math.max(...values, 1);
+        wrapEl.style.display = ''; wrapEl.style.height = '260px';
+
+        const ds = isLine
+          ? lineDs(ddCategoryName, values, color, true)
+          : { label: ddCategoryName, data: values, backgroundColor: color };
+
+        charts['dd'] = new Chart(document.getElementById('drilldown-chart'), {
+          type: isLine ? 'line' : 'bar',
+          data: { labels: rows.map(labelFn), datasets: [ds] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: { label: ctx => ` ${fmtHours(ctx.raw * 60)}` } },
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+              y: { ticks: { stepSize: niceStepMin(maxVal), callback: v => fmtHours(v * 60) }, grid: { color: getChartGrid() } },
+            },
+          },
+        });
+      }
+    }
+  } catch (e) {
+    loadEl.style.display   = 'none';
+    nodataEl.style.display = '';
+    console.error('Category drilldown error:', e);
+  }
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────
@@ -1932,6 +2701,9 @@ async function openSettings() {
   // Load app merges list
   renderMergeSettingsList();
 
+  // Load categories list (always fresh so any changes from drilldown are reflected)
+  renderCategoriesSettings();
+
   // Load collection history
   document.getElementById('logs-loading').style.display = '';
   document.getElementById('logs-nodata').style.display  = 'none';
@@ -2036,6 +2808,7 @@ async function init() {
   if (dedupToggleEl) dedupToggleEl.checked = settings.deduplicateDeviceTime;
   syncChartTypeToggles();
   syncOverviewToggle();
+  updateCatModeButtons();
 
   window.api.onCollectProgress(async () => {
     await refreshLastRun();
@@ -2048,6 +2821,7 @@ async function init() {
   const fdaOk = await checkFdaAndInit();
   if (!fdaOk) return;
 
+  await refreshCategories(); // keep CATEGORIES in sync with user-defined ones
   await refreshDevices();
   await refreshLastRun();
   loadCurrentTab();
@@ -2289,8 +3063,42 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCurrentTab();
   });
 
+  // Add-category button
+  const catAddInput = document.getElementById('cat-add-input');
+  const catAddBtn   = document.getElementById('cat-add-btn');
+
+  async function doAddCategory() {
+    const name = catAddInput.value.trim();
+    if (!name) return;
+    try {
+      await window.api.addCategory(name);
+      catAddInput.value = '';
+      await renderCategoriesSettings();
+      if (settings.groupByCategory) loadCurrentTab();
+    } catch (err) {
+      alert('Could not add category: ' + (err?.message || err));
+    }
+  }
+  catAddBtn.addEventListener('click', doAddCategory);
+  catAddInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAddCategory(); });
+
   // CSV export
   document.getElementById('csv-btn').addEventListener('click', exportCsv);
+
+  // By Category toggle (all tabs)
+  document.querySelectorAll('.cat-mode-btn[data-cat-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => setCategoryMode(!settings.groupByCategory));
+  });
+
+  // Category drilldown view toggle (Over Time | By App)
+  document.getElementById('dd-cat-view').addEventListener('click', (e) => {
+    const btn = e.target.closest('.chart-type-btn');
+    if (!btn || !ddIsCategoryDrilldown) return;
+    const view = btn.dataset.view;
+    if (view === ddCategoryView) return;
+    ddCategoryView = view;
+    fetchAndRenderCategoryDrilldown();
+  });
 
   // Drill-down close
   document.getElementById('drilldown-close').addEventListener('click', closeDrilldown);

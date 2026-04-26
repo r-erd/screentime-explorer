@@ -131,8 +131,7 @@ fn fetch_local_rows(conn: &Connection) -> rusqlite::Result<Vec<DailyRow>> {
                 usage_secs:  row.get(5)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 

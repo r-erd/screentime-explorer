@@ -204,6 +204,85 @@ pub fn get_app_hourly(app_id: String, from: i64, to: i64, state: State<'_, DbSta
     db::get_app_hourly(&conn, &app_id, from, to).map_err(map_err)
 }
 
+// ── Category queries ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_category_screentime(from: i64, to: i64, device_id: Option<String>, dedup: bool, state: State<'_, DbState>) -> Result<db::CategoryScreentimeResult, String> {
+    validate_ts(from, to)?;
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_category_screentime(&conn, from, to, device_id.as_deref(), dedup).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_category_daily(from: i64, to: i64, device_id: Option<String>, dedup: bool, state: State<'_, DbState>) -> Result<db::CategoryDailyResult, String> {
+    validate_ts(from, to)?;
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_category_daily(&conn, from, to, device_id.as_deref(), dedup).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_category_hourly(from: i64, to: i64, device_id: Option<String>, dedup: bool, state: State<'_, DbState>) -> Result<db::CategoryHourlyResult, String> {
+    validate_ts(from, to)?;
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_category_hourly(&conn, from, to, device_id.as_deref(), dedup).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_apps_in_category(category: String, from: i64, to: i64, state: State<'_, DbState>) -> Result<db::AppsInCategoryResult, String> {
+    validate_ts(from, to)?;
+    if category.is_empty() || category.len() > 64 { return Err("Invalid category".into()); }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_apps_in_category(&conn, &category, from, to).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_app_category(app_id: String, state: State<'_, DbState>) -> Result<db::AppCategoryResult, String> {
+    if app_id.is_empty() || app_id.len() > 512 { return Err("Invalid app_id".into()); }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_app_category(&conn, &app_id).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_all_app_categories(state: State<'_, DbState>) -> Result<db::AllAppCategoriesResult, String> {
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_all_app_categories(&conn).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn set_app_category(app_id: String, category: String, state: State<'_, DbState>) -> Result<(), String> {
+    if app_id.is_empty() || app_id.len() > 512 { return Err("Invalid app_id".into()); }
+    if category.is_empty() || category.len() > 64 { return Err("Invalid category".into()); }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::set_app_category(&conn, &app_id, &category).map_err(map_err)
+}
+
+// ── Category management ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_categories(state: State<'_, DbState>) -> Result<db::CategoriesResult, String> {
+    let conn = state.0.lock().map_err(map_err)?;
+    db::get_categories(&conn).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn add_category(name: String, state: State<'_, DbState>) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() || name.len() > 64 { return Err("Invalid category name".into()); }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::add_category(&conn, &name).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn remove_category(name: String, state: State<'_, DbState>) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() { return Err("Invalid category name".into()); }
+    if db::BUILTIN_CATEGORIES.contains(&name.as_str()) {
+        return Err("Cannot remove a built-in category".into());
+    }
+    let conn = state.0.lock().map_err(map_err)?;
+    db::remove_category(&conn, &name).map_err(map_err)
+}
+
 // ── Notifications ─────────────────────────────────────────────────────────────
 
 #[tauri::command]

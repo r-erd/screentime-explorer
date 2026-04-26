@@ -51,6 +51,18 @@
     // ── Extended API ──────────────────────────────────────────────────────────
     getAppDaily:      (appId, from, to) => inv('get_app_daily',  { appId, from, to }),
     getAppHourly:     (appId, from, to) => inv('get_app_hourly', { appId, from, to }),
+
+    // ── Category queries ──────────────────────────────────────────────────────
+    getCategoryScreentime: (from, to, deviceId = null, dedup = false) => inv('get_category_screentime', { from, to, deviceId, dedup }),
+    getCategoryDaily:      (from, to, deviceId = null, dedup = false) => inv('get_category_daily',      { from, to, deviceId, dedup }),
+    getCategoryHourly:     (from, to, deviceId = null, dedup = false) => inv('get_category_hourly',     { from, to, deviceId, dedup }),
+    getAppsInCategory:     (category, from, to)    => inv('get_apps_in_category',    { category, from, to }),
+    getAppCategory:        (appId)                 => inv('get_app_category',        { appId }),
+    setAppCategory:        (appId, category)       => inv('set_app_category',        { appId, category }),
+    getAllAppCategories:    ()                      => inv('get_all_app_categories',  {}),
+    getCategories:  ()       => inv('get_categories',  {}),
+    addCategory:    (name)   => inv('add_category',    { name }),
+    removeCategory: (name)   => inv('remove_category', { name }),
     showNotification: (title, body)     => inv('show_notification', { title, body }),
     getAutostart:     ()                => inv('get_autostart', {}),
     setAutostart:     (enabled)         => inv('set_autostart', { enabled }),

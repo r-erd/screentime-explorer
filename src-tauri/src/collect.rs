@@ -70,6 +70,29 @@ struct Row {
     device_model: Option<String>,
 }
 
+/// Read rows from knowledgeC.db. Returns `Err(message)` when the DB can't
+/// be opened or queried; row-level decode errors are propagated via `?`.
+fn read_knowledge_rows(kdb_path: &std::path::Path, apple_last_ts: i64) -> Result<Vec<Row>, String> {
+    let src = Connection::open_with_flags(kdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| e.to_string())?;
+    let mut stmt = src.prepare(QUERY).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![apple_last_ts], |row| {
+        Ok(Row {
+            app:          row.get(0)?,
+            usage_seconds: row.get(1)?,
+            start_time:   row.get(2)?,
+            end_time:     row.get(3)?,
+            tz_offset:    row.get(4)?,
+            device_id:    row.get(5)?,
+            device_model: row.get(6)?,
+        })
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|e| e.to_string());
+    rows
+}
+
 pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectResult)) -> CollectResult {
     let ran_at = unix_now();
     let mut error: Option<String> = None;
@@ -86,34 +109,11 @@ pub fn collect(dst_conn: Arc<Mutex<Connection>>, on_progress: impl Fn(CollectRes
     let apple_last_ts = if last_ts > 0 { last_ts - APPLE_EPOCH_OFFSET } else { 0 };
 
     // Read from knowledgeC.db (read-only)
-    let mut rows: Vec<Row> = Vec::new();
     let kdb_path = knowledge_db_path();
-    match Connection::open_with_flags(&kdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) {
-        Ok(src) => {
-            match src.prepare(QUERY) {
-                Ok(mut stmt) => {
-                    match stmt.query_map(params![apple_last_ts], |row| {
-                        Ok(Row {
-                            app:          row.get::<_, String>(0).unwrap_or_default(),
-                            usage_seconds: row.get::<_, f64>(1).unwrap_or(0.0),
-                            start_time:   row.get::<_, i64>(2).unwrap_or(0),
-                            end_time:     row.get::<_, i64>(3).unwrap_or(0),
-                            tz_offset:    row.get::<_, i64>(4).unwrap_or(0),
-                            device_id:    row.get::<_, String>(5).unwrap_or_default(),
-                            device_model: row.get::<_, Option<String>>(6).unwrap_or(None),
-                        })
-                    }) {
-                        Ok(mapped) => {
-                            for r in mapped.flatten() { rows.push(r); }
-                        }
-                        Err(e) => { error = Some(e.to_string()); }
-                    }
-                }
-                Err(e) => { error = Some(e.to_string()); }
-            }
-        }
-        Err(e) => { error = Some(e.to_string()); }
-    }
+    let rows = match read_knowledge_rows(&kdb_path, apple_last_ts) {
+        Ok(r)  => r,
+        Err(e) => { error = Some(e); Vec::new() }
+    };
 
     let fetched = rows.len() as i64;
 

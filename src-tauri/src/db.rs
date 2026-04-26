@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Result as SqlResult, params};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // Apple Core Data epoch starts 2001-01-01; Unix epoch 1970-01-01.
 pub const APPLE_EPOCH_OFFSET: i64 = 978_307_200;
@@ -44,6 +44,15 @@ pub fn init_schema(conn: &Connection) -> SqlResult<()> {
             device_id    TEXT PRIMARY KEY,
             display_name TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS app_categories (
+            app_id   TEXT NOT NULL PRIMARY KEY,
+            category TEXT NOT NULL DEFAULT 'Other'
+        );
+
+        CREATE TABLE IF NOT EXISTS custom_categories (
+            name TEXT PRIMARY KEY
+        );
     ")?;
 
     // Migrate: add per-source columns to collection_log if they don't exist yet.
@@ -57,6 +66,19 @@ pub fn init_schema(conn: &Connection) -> SqlResult<()> {
         let _ = conn.execute(sql, []);
     }
 
+    // Seed built-in catalogue (INSERT OR IGNORE preserves user overrides).
+    seed_catalogue(conn)?;
+
+    Ok(())
+}
+
+fn seed_catalogue(conn: &Connection) -> SqlResult<()> {
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO app_categories (app_id, category) VALUES (?1, ?2)"
+    )?;
+    for (app_id, category) in crate::catalogue::entries() {
+        stmt.execute(params![app_id, category])?;
+    }
     Ok(())
 }
 
@@ -162,7 +184,7 @@ fn fetch_intervals_by_day(
     let mut map: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     let rows = stmt.query_map(params![from, to], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
-    })?.filter_map(|r| r.ok());
+    })?.collect::<SqlResult<Vec<_>>>()?;
     for (day, s, e) in rows {
         map.entry(day).or_default().push((s, e));
     }
@@ -180,7 +202,7 @@ fn fetch_dedup_total(conn: &Connection, from: i64, to: i64) -> SqlResult<i64> {
     )?;
     let ivs: Vec<(i64, i64)> = stmt.query_map(params![from, to], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-    })?.filter_map(|r| r.ok()).collect();
+    })?.collect::<SqlResult<Vec<_>>>()?;
     Ok(merge_intervals(ivs))
 }
 
@@ -247,13 +269,12 @@ pub fn get_daily(conn: &Connection, from: i64, to: i64) -> SqlResult<DailyResult
 
     let rows: Vec<(String, String, i64)> = stmt.query_map(params![from, to], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    })?.filter_map(|r| r.ok()).collect();
+    })?.collect::<SqlResult<Vec<_>>>()?;
 
     // Fetch raw intervals for dedup computation (one query covers the whole range)
     let mut ivs_by_day = fetch_intervals_by_day(conn, from, to)?;
 
     // Build contiguous date range
-    use std::collections::BTreeMap;
     let mut days: BTreeMap<String, DayRow> = BTreeMap::new();
 
     let end_ts = to.min(
@@ -269,7 +290,7 @@ pub fn get_daily(conn: &Connection, from: i64, to: i64) -> SqlResult<DailyResult
     // produced a spurious empty day at the start of every period.
     let mut cursor = from;
     while cursor <= end_ts {
-        let iso = unix_to_date_local(cursor);
+        let iso = unix_to_date_local(conn, cursor);
         days.insert(iso.clone(), DayRow { date: iso, by_device: HashMap::new(), dedup_total: 0 });
         cursor += 86400;
     }
@@ -304,7 +325,7 @@ pub fn get_hourly(conn: &Connection, from: i64, to: i64) -> SqlResult<HourlyResu
 
     let rows: Vec<(i64, String, i64)> = stmt.query_map(params![from, to], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    })?.filter_map(|r| r.ok()).collect();
+    })?.collect::<SqlResult<Vec<_>>>()?;
 
     let mut hours: Vec<HourRow> = (0..24).map(|h| HourRow { hour: h, by_device: HashMap::new(), dedup_secs: 0 }).collect();
 
@@ -337,7 +358,7 @@ pub fn get_hourly(conn: &Connection, from: i64, to: i64) -> SqlResult<HourlyResu
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)?,
             ))
-        })?.filter_map(|r| r.ok());
+        })?.collect::<SqlResult<Vec<_>>>()?;
 
         for (day, hour, s, e) in iv_rows {
             buckets.entry((day, hour)).or_default().push((s, e));
@@ -392,7 +413,7 @@ pub fn get_devices(conn: &Connection) -> SqlResult<DevicesResult> {
             "iPad".to_string()
         };
         Ok(DeviceInfo { device_id, device_type, display_name })
-    })?.filter_map(|r| r.ok()).collect();
+    })?.collect::<SqlResult<Vec<_>>>()?;
 
     // Sort: mac first, then iphone, then ipad
     devices.sort_by_key(|d| match d.device_type.as_str() {
@@ -423,7 +444,7 @@ pub fn get_collection_log(conn: &Connection, limit: i64) -> SqlResult<Collection
             biome_inserted: row.get(6)?,
             error:          row.get(7)?,
         })
-    })?.filter_map(|r| r.ok()).collect();
+    })?.collect::<SqlResult<Vec<_>>>()?;
     Ok(CollectionLogResult { runs })
 }
 
@@ -500,10 +521,10 @@ pub fn get_app_daily(conn: &Connection, app_id: &str, from: i64, to: i64) -> Sql
          GROUP BY day, device_id ORDER BY day ASC"
     )?;
 
-    let mut by_date: std::collections::BTreeMap<String, AppDailyRow> = std::collections::BTreeMap::new();
+    let mut by_date: BTreeMap<String, AppDailyRow> = BTreeMap::new();
     let rows = stmt.query_map(params![app_id, from, to], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
-    })?.filter_map(|r| r.ok());
+    })?.collect::<SqlResult<Vec<_>>>()?;
 
     for (date, device_id, total) in rows {
         let entry = by_date.entry(date.clone()).or_insert_with(|| AppDailyRow {
@@ -553,7 +574,7 @@ pub fn get_app_hourly(conn: &Connection, app_id: &str, from: i64, to: i64) -> Sq
 
     let rows: Vec<(i64, String, i64)> = stmt.query_map(params![app_id, from, to], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    })?.filter_map(|r| r.ok()).collect();
+    })?.collect::<SqlResult<Vec<_>>>()?;
 
     for (hour, device_id, total) in rows {
         if let Some(entry) = hours.get_mut(hour as usize) {
@@ -565,21 +586,345 @@ pub fn get_app_hourly(conn: &Connection, app_id: &str, from: i64, to: i64) -> Sq
     Ok(AppHourlyResult { hours, num_days })
 }
 
+// ── Category queries ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct CategoryTotalRow {
+    pub category: String,
+    pub total:    i64,
+}
+
+#[derive(Serialize)]
+pub struct CategoryScreentimeResult {
+    pub categories: Vec<CategoryTotalRow>,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct CategoryDayRow {
+    pub date:        String,
+    pub by_category: HashMap<String, i64>,
+}
+
+#[derive(Serialize)]
+pub struct CategoryDailyResult {
+    pub days: Vec<CategoryDayRow>,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct CategoryHourRow {
+    pub hour:        i64,
+    pub by_category: HashMap<String, i64>,
+}
+
+#[derive(Serialize)]
+pub struct CategoryHourlyResult {
+    pub hours: Vec<CategoryHourRow>,
+}
+
+#[derive(Serialize)]
+pub struct AppInCategoryRow {
+    pub app:          String,
+    pub display_name: String,
+    pub total:        i64,
+}
+
+#[derive(Serialize)]
+pub struct AppsInCategoryResult {
+    pub apps:     Vec<AppInCategoryRow>,
+    pub category: String,
+}
+
+#[derive(Serialize)]
+pub struct AppCategoryResult {
+    pub category: String,
+}
+
+// ── Shared raw-interval helper for category dedup ─────────────────────────────
+
+/// One raw row used by all three category dedup paths.
+/// Fetched in a single query; each caller uses the fields it needs.
+struct CategoryInterval {
+    category: String,
+    day:      String,   // local "YYYY-MM-DD"
+    hour:     i64,      // local 0-23
+    start:    i64,
+    end:      i64,
+}
+
+fn fetch_category_intervals(conn: &Connection, from: i64, to: i64) -> SqlResult<Vec<CategoryInterval>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(ac.category, 'Other'), \
+         DATE(s.start_time, 'unixepoch', 'localtime'), \
+         CAST(strftime('%H', s.start_time, 'unixepoch', 'localtime') AS INTEGER), \
+         s.start_time, \
+         COALESCE(s.end_time, s.start_time + CAST(s.usage_seconds AS INTEGER)) \
+         FROM screentime s \
+         LEFT JOIN app_categories ac ON s.app = ac.app_id \
+         WHERE s.start_time >= ?1 AND s.start_time <= ?2 \
+           AND s.app IS NOT NULL AND s.usage_seconds > 0"
+    )?;
+    let rows = stmt.query_map(params![from, to], |row| {
+        Ok(CategoryInterval {
+            category: row.get(0)?,
+            day:      row.get(1)?,
+            hour:     row.get(2)?,
+            start:    row.get(3)?,
+            end:      row.get(4)?,
+        })
+    })?.collect::<SqlResult<Vec<_>>>();
+    rows
+}
+
+pub fn get_category_screentime(conn: &Connection, from: i64, to: i64, device_id: Option<&str>, dedup: bool) -> SqlResult<CategoryScreentimeResult> {
+    if dedup && device_id.is_none() {
+        let raw = fetch_category_intervals(conn, from, to)?;
+        let mut by_cat: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+        for iv in raw {
+            by_cat.entry(iv.category).or_default().push((iv.start, iv.end));
+        }
+        let mut categories: Vec<CategoryTotalRow> = by_cat.into_iter()
+            .map(|(cat, ivs)| CategoryTotalRow { category: cat, total: merge_intervals(ivs) })
+            .collect();
+        categories.sort_by(|a, b| b.total.cmp(&a.total));
+        return Ok(CategoryScreentimeResult { categories });
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(ac.category, 'Other') AS cat, \
+         CAST(SUM(s.usage_seconds) AS INTEGER) AS total \
+         FROM screentime s \
+         LEFT JOIN app_categories ac ON s.app = ac.app_id \
+         WHERE s.start_time >= ?1 AND s.start_time <= ?2 \
+           AND s.app IS NOT NULL AND s.usage_seconds > 0 \
+           AND (?3 IS NULL OR s.device_id = ?3) \
+         GROUP BY cat ORDER BY total DESC"
+    )?;
+    let rows: Vec<CategoryTotalRow> = stmt.query_map(params![from, to, device_id], |row| {
+        Ok(CategoryTotalRow { category: row.get(0)?, total: row.get(1)? })
+    })?.collect::<SqlResult<Vec<_>>>()?;
+    Ok(CategoryScreentimeResult { categories: rows })
+}
+
+pub fn get_category_daily(conn: &Connection, from: i64, to: i64, device_id: Option<&str>, dedup: bool) -> SqlResult<CategoryDailyResult> {
+    if dedup && device_id.is_none() {
+        let raw = fetch_category_intervals(conn, from, to)?;
+        let mut by_day_cat: BTreeMap<String, HashMap<String, Vec<(i64, i64)>>> = BTreeMap::new();
+        for iv in raw {
+            by_day_cat.entry(iv.day).or_default().entry(iv.category).or_default().push((iv.start, iv.end));
+        }
+        let days = by_day_cat.into_iter().map(|(date, cats)| {
+            let by_category = cats.into_iter()
+                .map(|(cat, ivs)| (cat, merge_intervals(ivs)))
+                .collect();
+            CategoryDayRow { date, by_category }
+        }).collect();
+        return Ok(CategoryDailyResult { days });
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT DATE(s.start_time, 'unixepoch', 'localtime') AS day, \
+         COALESCE(ac.category, 'Other') AS cat, \
+         CAST(SUM(s.usage_seconds) AS INTEGER) AS total \
+         FROM screentime s \
+         LEFT JOIN app_categories ac ON s.app = ac.app_id \
+         WHERE s.start_time >= ?1 AND s.start_time <= ?2 \
+           AND s.app IS NOT NULL AND s.usage_seconds > 0 \
+           AND (?3 IS NULL OR s.device_id = ?3) \
+         GROUP BY day, cat ORDER BY day ASC"
+    )?;
+    let raw: Vec<(String, String, i64)> = stmt.query_map(params![from, to, device_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?.collect::<SqlResult<Vec<_>>>()?;
+
+    let mut by_date: BTreeMap<String, CategoryDayRow> = BTreeMap::new();
+    for (date, cat, total) in raw {
+        let entry = by_date.entry(date.clone()).or_insert_with(|| CategoryDayRow {
+            date,
+            by_category: HashMap::new(),
+        });
+        *entry.by_category.entry(cat).or_insert(0) += total;
+    }
+    Ok(CategoryDailyResult { days: by_date.into_values().collect() })
+}
+
+pub fn get_category_hourly(conn: &Connection, from: i64, to: i64, device_id: Option<&str>, dedup: bool) -> SqlResult<CategoryHourlyResult> {
+    if dedup && device_id.is_none() {
+        let raw = fetch_category_intervals(conn, from, to)?;
+        let mut by_hour_cat: HashMap<i64, HashMap<String, Vec<(i64, i64)>>> = HashMap::new();
+        for iv in raw {
+            by_hour_cat.entry(iv.hour).or_default().entry(iv.category).or_default().push((iv.start, iv.end));
+        }
+        let mut hours: Vec<CategoryHourRow> = (0..24)
+            .map(|h| CategoryHourRow { hour: h, by_category: HashMap::new() })
+            .collect();
+        for (hour, cats) in by_hour_cat {
+            if let Some(entry) = hours.get_mut(hour as usize) {
+                for (cat, ivs) in cats {
+                    entry.by_category.insert(cat, merge_intervals(ivs));
+                }
+            }
+        }
+        return Ok(CategoryHourlyResult { hours });
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT CAST(strftime('%H', s.start_time, 'unixepoch', 'localtime') AS INTEGER) AS hour, \
+         COALESCE(ac.category, 'Other') AS cat, \
+         CAST(SUM(s.usage_seconds) AS INTEGER) AS total \
+         FROM screentime s \
+         LEFT JOIN app_categories ac ON s.app = ac.app_id \
+         WHERE s.start_time >= ?1 AND s.start_time <= ?2 \
+           AND s.app IS NOT NULL AND s.usage_seconds > 0 \
+           AND (?3 IS NULL OR s.device_id = ?3) \
+         GROUP BY hour, cat ORDER BY hour ASC"
+    )?;
+    let raw: Vec<(i64, String, i64)> = stmt.query_map(params![from, to, device_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?.collect::<SqlResult<Vec<_>>>()?;
+
+    let mut hours: Vec<CategoryHourRow> = (0..24)
+        .map(|h| CategoryHourRow { hour: h, by_category: HashMap::new() })
+        .collect();
+    for (hour, cat, total) in raw {
+        if let Some(entry) = hours.get_mut(hour as usize) {
+            *entry.by_category.entry(cat).or_insert(0) += total;
+        }
+    }
+    Ok(CategoryHourlyResult { hours })
+}
+
+pub fn get_apps_in_category(conn: &Connection, category: &str, from: i64, to: i64) -> SqlResult<AppsInCategoryResult> {
+    let mut stmt = conn.prepare(
+        "SELECT s.app, COALESCE(an.display_name, s.app) AS display_name, \
+         CAST(SUM(s.usage_seconds) AS INTEGER) AS total \
+         FROM screentime s \
+         LEFT JOIN app_categories ac ON s.app = ac.app_id \
+         LEFT JOIN app_names an ON s.app = an.bundle_id \
+         WHERE s.start_time >= ?1 AND s.start_time <= ?2 \
+           AND s.app IS NOT NULL AND s.usage_seconds > 0 \
+           AND COALESCE(ac.category, 'Other') = ?3 \
+         GROUP BY s.app ORDER BY total DESC LIMIT 30"
+    )?;
+    let apps: Vec<AppInCategoryRow> = stmt.query_map(params![from, to, category], |row| {
+        Ok(AppInCategoryRow { app: row.get(0)?, display_name: row.get(1)?, total: row.get(2)? })
+    })?.collect::<SqlResult<Vec<_>>>()?;
+    Ok(AppsInCategoryResult { apps, category: category.to_string() })
+}
+
+pub fn get_app_category(conn: &Connection, app_id: &str) -> SqlResult<AppCategoryResult> {
+    let result = conn.query_row(
+        "SELECT category FROM app_categories WHERE app_id = ?1",
+        params![app_id],
+        |row| row.get::<_, String>(0),
+    );
+    Ok(AppCategoryResult {
+        category: result.unwrap_or_else(|_| "Other".to_string()),
+    })
+}
+
+pub fn set_app_category(conn: &Connection, app_id: &str, category: &str) -> SqlResult<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO app_categories (app_id, category) VALUES (?1, ?2)",
+        params![app_id, category],
+    )?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct AllAppCategoryRow {
+    pub app_id:       String,
+    pub display_name: String,
+    pub category:     String,
+}
+
+#[derive(Serialize)]
+pub struct AllAppCategoriesResult {
+    pub apps: Vec<AllAppCategoryRow>,
+}
+
+pub fn get_all_app_categories(conn: &Connection) -> SqlResult<AllAppCategoriesResult> {
+    let mut stmt = conn.prepare(
+        "SELECT s.app, \
+         COALESCE(n.display_name, s.app) AS display_name, \
+         COALESCE(ac.category, 'Other') AS category \
+         FROM (SELECT DISTINCT app FROM screentime WHERE app IS NOT NULL) s \
+         LEFT JOIN app_names n ON s.app = n.bundle_id \
+         LEFT JOIN app_categories ac ON s.app = ac.app_id \
+         ORDER BY display_name ASC"
+    )?;
+    let apps: Vec<AllAppCategoryRow> = stmt.query_map([], |row| {
+        Ok(AllAppCategoryRow {
+            app_id:       row.get(0)?,
+            display_name: row.get(1)?,
+            category:     row.get(2)?,
+        })
+    })?.collect::<SqlResult<Vec<_>>>()?;
+    Ok(AllAppCategoriesResult { apps })
+}
+
+// ── Category management ───────────────────────────────────────────────────────
+
+/// The categories seeded by the built-in catalogue. These cannot be removed by the user.
+pub const BUILTIN_CATEGORIES: &[&str] = &[
+    "Browser", "Communication", "Developer Tools", "Entertainment",
+    "Games", "Health & Fitness", "Other", "Productivity", "Social", "Utilities",
+];
+
+#[derive(Serialize)]
+pub struct CategoriesResult {
+    /// All available categories (built-ins + custom), sorted; "Other" always last.
+    pub categories: Vec<String>,
+    /// Which of those are built-in (cannot be removed).
+    pub builtin: Vec<String>,
+}
+
+pub fn get_categories(conn: &Connection) -> SqlResult<CategoriesResult> {
+    let mut stmt = conn.prepare("SELECT name FROM custom_categories ORDER BY name ASC")?;
+    let custom: Vec<String> = stmt.query_map([], |row| row.get(0))?
+        .collect::<SqlResult<Vec<_>>>()?;
+
+    let builtin: Vec<String> = BUILTIN_CATEGORIES.iter().map(|s| s.to_string()).collect();
+    let mut all: Vec<String> = builtin.clone();
+    for c in &custom {
+        if !all.contains(c) { all.push(c.clone()); }
+    }
+    all.sort();
+    // Keep "Other" always at the end
+    if let Some(pos) = all.iter().position(|s| s == "Other") {
+        all.remove(pos);
+        all.push("Other".to_string());
+    }
+    Ok(CategoriesResult { categories: all, builtin })
+}
+
+pub fn add_category(conn: &Connection, name: &str) -> SqlResult<()> {
+    conn.execute("INSERT OR IGNORE INTO custom_categories (name) VALUES (?1)", params![name])?;
+    Ok(())
+}
+
+/// Remove a custom category. All apps assigned to it are moved back to "Other".
+/// Built-in categories must be validated before calling this (checked in the command layer).
+pub fn remove_category(conn: &Connection, name: &str) -> SqlResult<()> {
+    conn.execute("UPDATE app_categories SET category = 'Other' WHERE category = ?1", params![name])?;
+    conn.execute("DELETE FROM custom_categories WHERE name = ?1", params![name])?;
+    Ok(())
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn unix_to_date_local(ts: i64) -> String {
-    // Use strftime via a temporary in-memory DB for simplicity
-    // (avoids pulling in the chrono crate)
-    if let Ok(mem) = Connection::open_in_memory() {
-        let result: Result<String, _> = mem.query_row(
-            "SELECT DATE(?1, 'unixepoch', 'localtime')",
-            params![ts],
-            |row| row.get(0),
-        );
-        if let Ok(s) = result { return s; }
-    }
-    // Fallback: crude UTC date
-    let days = ts / 86400;
-    let y = 1970 + days / 365;
-    format!("{:04}-01-01", y)
+/// Convert a Unix timestamp to a local "YYYY-MM-DD" string using the
+/// already-open database connection (avoids pulling in the `chrono` crate
+/// and, crucially, avoids opening a fresh in-memory DB on every call).
+fn unix_to_date_local(conn: &Connection, ts: i64) -> String {
+    conn.query_row(
+        "SELECT DATE(?1, 'unixepoch', 'localtime')",
+        params![ts],
+        |row| row.get(0),
+    )
+    .unwrap_or_else(|_| {
+        // Crude UTC fallback — only reached if SQLite itself is broken.
+        let days = ts / 86400;
+        let y = 1970 + days / 365;
+        format!("{:04}-01-01", y)
+    })
 }
